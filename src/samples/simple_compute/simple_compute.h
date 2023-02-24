@@ -14,7 +14,7 @@
 class SimpleCompute : public ICompute
 {
 public:
-  SimpleCompute(uint32_t a_length);
+  SimpleCompute(uint32_t a_length, bool a_use_shmem = false);
   ~SimpleCompute()  { Cleanup(); };
 
   inline VkInstance   GetVkInstance() const override { return m_instance; }
@@ -48,6 +48,7 @@ public:
 
   VkDebugReportCallbackEXT m_debugReportCallback = nullptr;
 private:
+  static constexpr uint32_t WG_SIZE = 256;
 
   VkInstance       m_instance       = VK_NULL_HANDLE;
   VkCommandPool    m_commandPool    = VK_NULL_HANDLE;
@@ -64,7 +65,8 @@ private:
   std::shared_ptr<vk_utils::DescriptorMaker> m_pBindings = nullptr;
 
   uint32_t m_length  = 16u;
-  
+  bool m_useShmem    = false;
+
   VkPhysicalDeviceFeatures m_enabledDeviceFeatures = {};
   std::vector<const char*> m_deviceExtensions      = {};
   std::vector<const char*> m_instanceExtensions    = {};
@@ -73,14 +75,14 @@ private:
   std::vector<const char*> m_validationLayers;
   std::shared_ptr<vk_utils::ICopyEngine> m_pCopyHelper;
 
-  VkDescriptorSet       m_sumDS; 
-  VkDescriptorSetLayout m_sumDSLayout = nullptr;
-  
+  VkDescriptorSet       m_convDS;
+  VkDescriptorSetLayout m_convDSLayout = nullptr;
+
   VkPipeline m_pipeline;
   VkPipelineLayout m_layout;
 
-  VkBuffer m_A, m_B, m_sum;
- 
+  VkBuffer m_in, m_out;
+
   void CreateInstance();
   void CreateDevice(uint32_t a_deviceId);
 

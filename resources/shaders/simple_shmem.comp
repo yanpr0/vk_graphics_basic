@@ -1,0 +1,48 @@
+#version 430
+
+layout( local_size_x = 256 ) in;
+
+layout( push_constant ) uniform params {
+  uint len;
+} PushConstant;
+
+layout(std430, binding = 0) buffer Values
+{
+    float values[];
+};
+
+layout(std430, binding = 1) buffer Res
+{
+    float res[];
+};
+
+shared float values_shared[3 + 256 + 3];
+
+void main()
+{
+    int idx = int(gl_GlobalInvocationID.x);
+    int len = int(PushConstant.len);
+    if (idx < len) {
+        int g_idx = int(gl_LocalInvocationID.x);
+        int wg_size = int(gl_WorkGroupSize.x);
+        wg_size = min(wg_size, len - int(gl_WorkGroupID.x) * wg_size);
+
+        values_shared[3 + g_idx] = values[idx];
+        if (g_idx < 6)
+        {
+            int local_idx = (wg_size + 3 + g_idx) % (wg_size + 6);
+            int offset = local_idx - 3 - g_idx;
+            int global_idx = idx + offset;
+            values_shared[local_idx] = (global_idx >= 0 && global_idx < len) ? values[global_idx] : 0.0f;
+        }
+
+        barrier();
+
+        float val = 0.0f;
+        for (int i = 0; i <= 6; ++i)
+        {
+            val += values_shared[g_idx + i];
+        }
+        res[idx] = values_shared[g_idx + 3] - val / 7.0f;
+    }
+}
