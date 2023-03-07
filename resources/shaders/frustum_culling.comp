@@ -1,0 +1,86 @@
+#version 450
+#extension GL_ARB_separate_shader_objects : enable
+#extension GL_GOOGLE_include_directive : require
+
+#include "unpack_attributes.h"
+#include "common.h"
+
+struct VkDrawIndexedIndirectCommand
+{
+    uint    indexCount;
+    uint    instanceCount;
+    uint    firstIndex;
+    int     vertexOffset;
+    uint    firstInstance;
+};
+
+struct BBox
+{
+    vec4 boxMin;
+    vec4 boxMax;
+};
+
+layout( local_size_x = 64 ) in;
+
+layout(binding = 0) buffer InstTransform
+{
+  mat4 instTransform[];
+};
+
+layout(binding = 1) buffer VisInstIds
+{
+  uint visInstIds[];
+};
+
+layout(binding = 2) buffer IndirectInfo
+{
+  VkDrawIndexedIndirectCommand indirectInfo;
+};
+
+layout(push_constant) uniform Params
+{
+  mat4 mProjView;
+  BBox bbox;
+  uint instCount;
+} params;
+
+bool IsVisible(BBox bbox, mat4 mTransform, mat4 mProjView)
+{
+  vec4 points[8] = {
+    {bbox.boxMin.x, bbox.boxMin.y, bbox.boxMin.z, 1},
+    {bbox.boxMin.x, bbox.boxMin.y, bbox.boxMax.z, 1},
+    {bbox.boxMin.x, bbox.boxMax.y, bbox.boxMin.z, 1},
+    {bbox.boxMin.x, bbox.boxMax.y, bbox.boxMax.z, 1},
+    {bbox.boxMax.x, bbox.boxMin.y, bbox.boxMin.z, 1},
+    {bbox.boxMax.x, bbox.boxMin.y, bbox.boxMax.z, 1},
+    {bbox.boxMax.x, bbox.boxMax.y, bbox.boxMin.z, 1},
+    {bbox.boxMax.x, bbox.boxMax.y, bbox.boxMax.z, 1}
+  };
+
+  bool res = false;
+
+  mat4 m = mProjView * mTransform;
+  for (uint i = 0; i < 8; ++i)
+  {
+    vec4 proj = m * points[i];
+    proj = proj / proj.w;
+    res = res || (abs(proj.x) <= 1.0f && abs(proj.y) <= 1.0f && proj.z >= 0.0f && proj.z <= 1.0f);
+  }
+
+  return res;
+}
+
+void main(void)
+{
+  uint id = gl_GlobalInvocationID.x;
+
+  if (id < params.instCount)
+  {
+    if (IsVisible(params.bbox, instTransform[id], params.mProjView))
+    {
+      uint i = atomicAdd(indirectInfo.instanceCount, 1);
+      visInstIds[i] = id;
+    }
+  }
+}
+

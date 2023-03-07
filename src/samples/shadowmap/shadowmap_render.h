@@ -12,6 +12,8 @@
 #include <vk_swapchain.h>
 #include <vk_quad.h>
 
+#include <cstddef>
+#include <cstdint>
 #include <string>
 #include <iostream>
 
@@ -62,13 +64,16 @@ public:
 
   VkDebugReportCallbackEXT m_debugReportCallback = nullptr;
 private:
+  static constexpr std::size_t m_instCount = 5000;//0;
 
-  VkInstance       m_instance       = VK_NULL_HANDLE;
-  VkCommandPool    m_commandPool    = VK_NULL_HANDLE;
-  VkPhysicalDevice m_physicalDevice = VK_NULL_HANDLE;
-  VkDevice         m_device         = VK_NULL_HANDLE;
-  VkQueue          m_graphicsQueue  = VK_NULL_HANDLE;
-  VkQueue          m_transferQueue  = VK_NULL_HANDLE;
+  VkInstance       m_instance           = VK_NULL_HANDLE;
+  VkCommandPool    m_commandPool        = VK_NULL_HANDLE;
+  VkCommandPool    m_computeCommandPool = VK_NULL_HANDLE;
+  VkPhysicalDevice m_physicalDevice     = VK_NULL_HANDLE;
+  VkDevice         m_device             = VK_NULL_HANDLE;
+  VkQueue          m_graphicsQueue      = VK_NULL_HANDLE;
+  //VkQueue          m_transferQueue      = VK_NULL_HANDLE;
+  //VkQueue          m_computeQueue       = VK_NULL_HANDLE;
 
   vk_utils::QueueFID_T m_queueFamilyIDXs {UINT32_MAX, UINT32_MAX, UINT32_MAX};
 
@@ -89,19 +94,43 @@ private:
     float4x4 model;
   } pushConst2M;
 
+  struct
+  {
+    float4x4 projView;
+    LiteMath::Box4f bbox;
+    std::uint32_t instCnt = m_instCount; // could be put to bbox.*.w
+  } m_pushConstCompute;
+
   float4x4 m_worldViewProj;
-  float4x4 m_lightMatrix;    
+  float4x4 m_lightMatrix;
 
   UniformParams m_uniforms {};
   VkBuffer m_ubo = VK_NULL_HANDLE;
   VkDeviceMemory m_uboAlloc = VK_NULL_HANDLE;
   void* m_uboMappedMem = nullptr;
 
+  VkBuffer m_instTransform = VK_NULL_HANDLE;
+  VkDeviceMemory m_instTransformAlloc = VK_NULL_HANDLE;
+  void* m_instTransformMappedMem = nullptr;
+
+  VkBuffer m_visInstIds = VK_NULL_HANDLE;
+  VkDeviceMemory m_visInstIdsAlloc = VK_NULL_HANDLE;
+  void* m_visInstIdsMappedMem = nullptr;
+
+  VkBuffer m_indirectInfo = VK_NULL_HANDLE;
+  VkDeviceMemory m_indirectInfoAlloc = VK_NULL_HANDLE;
+  void* m_indirectInfoMappedMem = nullptr;
+
+  pipeline_data_t m_computePipeline {};
   pipeline_data_t m_basicForwardPipeline {};
   pipeline_data_t m_shadowPipeline {};
 
+  VkDescriptorSet m_computeDS = VK_NULL_HANDLE;
+  VkDescriptorSetLayout m_computeDSLayout = VK_NULL_HANDLE;
+
   VkDescriptorSet m_dSet = VK_NULL_HANDLE;
   VkDescriptorSetLayout m_dSetLayout = VK_NULL_HANDLE;
+
   VkRenderPass m_screenRenderPass = VK_NULL_HANDLE; // main renderpass
 
   std::shared_ptr<vk_utils::DescriptorMaker> m_pBindings = nullptr;
@@ -125,16 +154,16 @@ private:
   std::vector<const char*> m_validationLayers;
 
   std::shared_ptr<SceneManager>     m_pScnMgr;
-  
+
   // objects and data for shadow map
   //
   std::shared_ptr<vk_utils::IQuad>               m_pFSQuad;
   //std::shared_ptr<vk_utils::RenderableTexture2D> m_pShadowMap;
   std::shared_ptr<vk_utils::RenderTarget>        m_pShadowMap2;
   uint32_t                                       m_shadowMapId = 0;
-  
+
   VkDeviceMemory        m_memShadowMap = VK_NULL_HANDLE;
-  VkDescriptorSet       m_quadDS; 
+  VkDescriptorSet       m_quadDS;
   VkDescriptorSetLayout m_quadDSLayout = nullptr;
 
   struct InputControlMouseEtc
@@ -147,24 +176,24 @@ private:
   */
   struct ShadowMapCam
   {
-    ShadowMapCam() 
-    {  
+    ShadowMapCam()
+    {
       cam.pos    = float3(4.0f, 4.0f, 4.0f);
       cam.lookAt = float3(0, 0, 0);
       cam.up     = float3(0, 1, 0);
-  
+
       radius          = 5.0f;
       lightTargetDist = 20.0f;
       usePerspectiveM = true;
     }
 
-    float  radius;           ///!< ignored when usePerspectiveM == true 
+    float  radius;           ///!< ignored when usePerspectiveM == true
     float  lightTargetDist;  ///!< identify depth range
     Camera cam;              ///!< user control for light to later get light worldViewProj matrix
     bool   usePerspectiveM;  ///!< use perspective matrix if true and ortographics otherwise
-  
+
   } m_light;
- 
+
   void DrawFrameSimple();
 
   void CreateInstance();
@@ -179,7 +208,7 @@ private:
   void CleanupPipelineAndSwapchain();
   void RecreateSwapChain();
 
-  void CreateUniformBuffer();
+  void CreateBuffers();
   void UpdateUniformBuffer(float a_time);
 
   void Cleanup();
