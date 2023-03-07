@@ -16,7 +16,7 @@ SimpleShadowmapRender::SimpleShadowmapRender(uint32_t a_width, uint32_t a_height
 
 void SimpleShadowmapRender::SetupDeviceFeatures()
 {
-  // m_enabledDeviceFeatures.fillModeNonSolid = VK_TRUE;
+  m_enabledDeviceFeatures.geometryShader = VK_TRUE;
 }
 
 void SimpleShadowmapRender::SetupDeviceExtensions()
@@ -164,7 +164,7 @@ void SimpleShadowmapRender::SetupSimplePipeline()
   
   auto shadowMap = m_pShadowMap2->m_attachments[m_shadowMapId];
 
-  m_pBindings->BindBegin(VK_SHADER_STAGE_FRAGMENT_BIT);
+  m_pBindings->BindBegin(VK_SHADER_STAGE_GEOMETRY_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
   m_pBindings->BindBuffer(0, m_ubo, VK_NULL_HANDLE, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
   m_pBindings->BindImage (1, shadowMap.view, m_pShadowMap2->m_sampler, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
   m_pBindings->BindEnd(&m_dSet, &m_dSetLayout);
@@ -202,6 +202,7 @@ void SimpleShadowmapRender::SetupSimplePipeline()
   {
     shader_paths[VK_SHADER_STAGE_FRAGMENT_BIT] = "../resources/shaders/simple_shadow.frag.spv";
     shader_paths[VK_SHADER_STAGE_VERTEX_BIT]   = "../resources/shaders/simple.vert.spv";
+    shader_paths[VK_SHADER_STAGE_GEOMETRY_BIT] = "../resources/shaders/simple.geom.spv";
   }
   maker.LoadShaders(m_device, shader_paths);
 
@@ -217,6 +218,7 @@ void SimpleShadowmapRender::SetupSimplePipeline()
   // maker.SetDefaultState(m_width, m_height);
   shader_paths.clear();
   shader_paths[VK_SHADER_STAGE_VERTEX_BIT] = "../resources/shaders/simple.vert.spv";
+  shader_paths[VK_SHADER_STAGE_GEOMETRY_BIT] = "../resources/shaders/simple.geom.spv";
   maker.LoadShaders(m_device, shader_paths);
 
   maker.viewport.width  = float(m_pShadowMap2->m_resolution.width);
@@ -261,7 +263,7 @@ void SimpleShadowmapRender::UpdateUniformBuffer(float a_time)
 
 void SimpleShadowmapRender::DrawSceneCmd(VkCommandBuffer a_cmdBuff, const float4x4& a_wvp)
 {
-  VkShaderStageFlags stageFlags = (VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
+  VkShaderStageFlags stageFlags = (VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_GEOMETRY_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
 
   VkDeviceSize zero_offset = 0u;
   VkBuffer vertexBuf = m_pScnMgr->GetVertexBuffer();
@@ -271,7 +273,7 @@ void SimpleShadowmapRender::DrawSceneCmd(VkCommandBuffer a_cmdBuff, const float4
   vkCmdBindIndexBuffer(a_cmdBuff, indexBuf, 0, VK_INDEX_TYPE_UINT32);
 
   pushConst2M.projView = a_wvp;
-  for (uint32_t i = 0; i < m_pScnMgr->InstancesNum(); ++i)
+  for (uint32_t i = 1; i < m_pScnMgr->InstancesNum(); ++i)
   {
     auto inst         = m_pScnMgr->GetInstanceInfo(i);
     pushConst2M.model = m_pScnMgr->GetInstanceMatrix(i);
@@ -322,6 +324,7 @@ void SimpleShadowmapRender::BuildCommandBufferSimple(VkCommandBuffer a_cmdBuff, 
   vkCmdBeginRenderPass(a_cmdBuff, &renderToShadowMap, VK_SUBPASS_CONTENTS_INLINE);
   {
     vkCmdBindPipeline(a_cmdBuff, VK_PIPELINE_BIND_POINT_GRAPHICS, m_shadowPipeline.pipeline);
+    vkCmdBindDescriptorSets(a_cmdBuff, VK_PIPELINE_BIND_POINT_GRAPHICS, m_shadowPipeline.layout, 0, 1, &m_dSet, 0, VK_NULL_HANDLE);
     DrawSceneCmd(a_cmdBuff, m_lightMatrix);
   }
   vkCmdEndRenderPass(a_cmdBuff);
