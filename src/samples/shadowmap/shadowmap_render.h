@@ -90,18 +90,22 @@ private:
   } pushConst2M;
 
   float4x4 m_worldViewProj;
-  float4x4 m_lightMatrix;    
+  float4x4 m_lightMatrix;
 
   UniformParams m_uniforms {};
   VkBuffer m_ubo = VK_NULL_HANDLE;
   VkDeviceMemory m_uboAlloc = VK_NULL_HANDLE;
   void* m_uboMappedMem = nullptr;
 
-  pipeline_data_t m_basicForwardPipeline {};
+  pipeline_data_t m_offscreenPipeline {};
+  pipeline_data_t m_deferredPipeline {};
   pipeline_data_t m_shadowPipeline {};
 
   VkDescriptorSet m_dSet = VK_NULL_HANDLE;
   VkDescriptorSetLayout m_dSetLayout = VK_NULL_HANDLE;
+  VkDescriptorSet m_gBufDSet= VK_NULL_HANDLE;
+  VkDescriptorSetLayout m_gBufDSetLayout = VK_NULL_HANDLE;
+
   VkRenderPass m_screenRenderPass = VK_NULL_HANDLE; // main renderpass
 
   std::shared_ptr<vk_utils::DescriptorMaker> m_pBindings = nullptr;
@@ -125,17 +129,24 @@ private:
   std::vector<const char*> m_validationLayers;
 
   std::shared_ptr<SceneManager>     m_pScnMgr;
-  
+
   // objects and data for shadow map
   //
   std::shared_ptr<vk_utils::IQuad>               m_pFSQuad;
   //std::shared_ptr<vk_utils::RenderableTexture2D> m_pShadowMap;
   std::shared_ptr<vk_utils::RenderTarget>        m_pShadowMap2;
   uint32_t                                       m_shadowMapId = 0;
-  
+
   VkDeviceMemory        m_memShadowMap = VK_NULL_HANDLE;
-  VkDescriptorSet       m_quadDS; 
+  VkDescriptorSet       m_quadDS;
   VkDescriptorSetLayout m_quadDSLayout = nullptr;
+
+  // G-buffer
+  std::shared_ptr<vk_utils::RenderTarget> m_pGBuffer;
+  uint32_t                                m_normalsId = 0;
+  uint32_t                                m_albedoId = 0;
+  uint32_t                                m_depthId = 0;
+  VkDeviceMemory                          m_memGBuffer = VK_NULL_HANDLE;
 
   struct InputControlMouseEtc
   {
@@ -147,24 +158,24 @@ private:
   */
   struct ShadowMapCam
   {
-    ShadowMapCam() 
-    {  
+    ShadowMapCam()
+    {
       cam.pos    = float3(4.0f, 4.0f, 4.0f);
       cam.lookAt = float3(0, 0, 0);
       cam.up     = float3(0, 1, 0);
-  
+
       radius          = 5.0f;
       lightTargetDist = 20.0f;
       usePerspectiveM = true;
     }
 
-    float  radius;           ///!< ignored when usePerspectiveM == true 
+    float  radius;           ///!< ignored when usePerspectiveM == true
     float  lightTargetDist;  ///!< identify depth range
     Camera cam;              ///!< user control for light to later get light worldViewProj matrix
     bool   usePerspectiveM;  ///!< use perspective matrix if true and ortographics otherwise
-  
+
   } m_light;
- 
+
   void DrawFrameSimple();
 
   void CreateInstance();

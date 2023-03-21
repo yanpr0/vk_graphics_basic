@@ -86,11 +86,11 @@ void SimpleShadowmapRender::InitPresentation(VkSurfaceKHR &a_surface, bool)
   m_screenRenderPass = vk_utils::createDefaultRenderPass(m_device, m_swapchain.GetFormat(), m_depthBuffer.format);
   m_depthBuffer  = vk_utils::createDepthTexture(m_device, m_physicalDevice, m_width, m_height, m_depthBuffer.format);
   m_frameBuffers = vk_utils::createFrameBuffers(m_device, m_swapchain, m_screenRenderPass, m_depthBuffer.view);
-  
+
   // create full screen quad for debug purposes
-  // 
+  //
   m_pFSQuad = std::make_shared<vk_utils::QuadRenderer>(0,0, 512, 512);
-  m_pFSQuad->Create(m_device, "../resources/shaders/quad3_vert.vert.spv", "../resources/shaders/quad.frag.spv", 
+  m_pFSQuad->Create(m_device, "../resources/shaders/quad3_vert.vert.spv", "../resources/shaders/quad.frag.spv",
                     vk_utils::RenderTargetInfo2D{ VkExtent2D{ m_width, m_height }, m_swapchain.GetFormat(),                                        // this is debug full scree quad
                                                   VK_ATTACHMENT_LOAD_OP_LOAD, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR }); // seems we need LOAD_OP_LOAD if we want to draw quad to part of screen
 
@@ -104,7 +104,7 @@ void SimpleShadowmapRender::InitPresentation(VkSurfaceKHR &a_surface, bool)
   infoDepth.imageSampleCount = VK_SAMPLE_COUNT_1_BIT;
   m_shadowMapId              = m_pShadowMap2->CreateAttachment(infoDepth);
   auto memReq                = m_pShadowMap2->GetMemoryRequirements()[0]; // we know that we have only one texture
-  
+
   // memory for all shadowmaps (well, if you have them more than 1 ...)
   {
     VkMemoryAllocateInfo allocateInfo = {};
@@ -119,6 +119,50 @@ void SimpleShadowmapRender::InitPresentation(VkSurfaceKHR &a_surface, bool)
   m_pShadowMap2->CreateViewAndBindMemory(m_memShadowMap, {0});
   m_pShadowMap2->CreateDefaultSampler();
   m_pShadowMap2->CreateDefaultRenderPass();
+
+  // create G-buffer
+  //
+  m_pGBuffer = std::make_shared<vk_utils::RenderTarget>(m_device, VkExtent2D{m_height, m_width});
+
+  {
+    vk_utils::AttachmentInfo infoNormals;
+    infoNormals.format           = VK_FORMAT_R32G32B32A32_SFLOAT;
+    infoNormals.usage            = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    infoNormals.imageSampleCount = VK_SAMPLE_COUNT_1_BIT;
+    m_normalsId                  = m_pGBuffer->CreateAttachment(infoNormals);
+  }
+  {
+    vk_utils::AttachmentInfo infoAlbedo;
+    infoAlbedo.format           = VK_FORMAT_R32G32B32A32_SFLOAT;
+    infoAlbedo.usage            = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    infoAlbedo.imageSampleCount = VK_SAMPLE_COUNT_1_BIT;
+    m_albedoId                  = m_pGBuffer->CreateAttachment(infoAlbedo);
+  }
+  {
+    infoDepth.format           = VK_FORMAT_D16_UNORM;
+    infoDepth.usage            = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    infoDepth.imageSampleCount = VK_SAMPLE_COUNT_1_BIT;
+    m_depthId                  = m_pGBuffer->CreateAttachment(infoDepth);
+  }
+
+  auto memReqs = m_pGBuffer->GetMemoryRequirements();
+  std::uint32_t size1 = memReqs[0].size + (memReqs[1].alignment - memReqs[0].size % memReqs[1].alignment);
+  std::uint32_t size12 = size1 + memReqs[1].size + (memReqs[2].alignment - (size1 + memReqs[1].size) % memReqs[2].alignment);
+
+  // memory for all G-buffer components
+  {
+    VkMemoryAllocateInfo allocateInfo = {};
+    allocateInfo.sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    allocateInfo.pNext           = nullptr;
+    allocateInfo.allocationSize  = size12 + memReqs[2].size;
+    allocateInfo.memoryTypeIndex = vk_utils::findMemoryType(memReqs[0].memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, m_physicalDevice);
+
+    VK_CHECK_RESULT(vkAllocateMemory(m_device, &allocateInfo, NULL, &m_memGBuffer));
+  }
+
+  m_pGBuffer->CreateViewAndBindMemory(m_memGBuffer, {0, size1, size12});
+  m_pGBuffer->CreateDefaultSampler();
+  m_pGBuffer->CreateDefaultRenderPass();
 }
 
 void SimpleShadowmapRender::CreateInstance()
@@ -156,17 +200,24 @@ void SimpleShadowmapRender::CreateDevice(uint32_t a_deviceId)
 void SimpleShadowmapRender::SetupSimplePipeline()
 {
   std::vector<std::pair<VkDescriptorType, uint32_t> > dtypes = {
-      {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,             1},
-      {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,     2}
+      {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,             2},
+      {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,     5}
   };
 
-  m_pBindings = std::make_shared<vk_utils::DescriptorMaker>(m_device, dtypes, 2);
-  
+  m_pBindings = std::make_shared<vk_utils::DescriptorMaker>(m_device, dtypes, 3);
+
   auto shadowMap = m_pShadowMap2->m_attachments[m_shadowMapId];
 
   m_pBindings->BindBegin(VK_SHADER_STAGE_FRAGMENT_BIT);
   m_pBindings->BindBuffer(0, m_ubo, VK_NULL_HANDLE, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
+  m_pBindings->BindEnd(&m_gBufDSet, &m_gBufDSetLayout);
+
+  m_pBindings->BindBegin(VK_SHADER_STAGE_FRAGMENT_BIT);
+  m_pBindings->BindBuffer(0, m_ubo, VK_NULL_HANDLE, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
   m_pBindings->BindImage (1, shadowMap.view, m_pShadowMap2->m_sampler, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
+  m_pBindings->BindImage (2, m_pGBuffer->m_attachments[m_normalsId].view, m_pGBuffer->m_sampler, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
+  m_pBindings->BindImage (3, m_pGBuffer->m_attachments[m_albedoId ].view, m_pGBuffer->m_sampler, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
+  m_pBindings->BindImage (4, m_pGBuffer->m_attachments[m_depthId  ].view, m_pGBuffer->m_sampler, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
   m_pBindings->BindEnd(&m_dSet, &m_dSetLayout);
 
   //m_pBindings->BindImage(0, m_GBufTarget->m_attachments[m_GBuf_idx[GBUF_ATTACHMENT::POS_Z]].view, m_GBufTarget->m_sampler, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
@@ -177,16 +228,28 @@ void SimpleShadowmapRender::SetupSimplePipeline()
 
   // if we are recreating pipeline (for example, to reload shaders)
   // we need to cleanup old pipeline
-  if(m_basicForwardPipeline.layout != VK_NULL_HANDLE)
+  if(m_offscreenPipeline.layout != VK_NULL_HANDLE)
   {
-    vkDestroyPipelineLayout(m_device, m_basicForwardPipeline.layout, nullptr);
-    m_basicForwardPipeline.layout = VK_NULL_HANDLE;
+    vkDestroyPipelineLayout(m_device, m_offscreenPipeline.layout, nullptr);
+    m_offscreenPipeline.layout = VK_NULL_HANDLE;
   }
-  if(m_basicForwardPipeline.pipeline != VK_NULL_HANDLE)
+  if(m_deferredPipeline.layout != VK_NULL_HANDLE)
   {
-    vkDestroyPipeline(m_device, m_basicForwardPipeline.pipeline, nullptr);
-    m_basicForwardPipeline.pipeline = VK_NULL_HANDLE;
+    vkDestroyPipelineLayout(m_device, m_deferredPipeline.layout, nullptr);
+    m_deferredPipeline.layout = VK_NULL_HANDLE;
   }
+
+  if(m_offscreenPipeline.pipeline != VK_NULL_HANDLE)
+  {
+    vkDestroyPipeline(m_device, m_offscreenPipeline.pipeline, nullptr);
+    m_offscreenPipeline.pipeline = VK_NULL_HANDLE;
+  }
+  if(m_deferredPipeline.pipeline != VK_NULL_HANDLE)
+  {
+    vkDestroyPipeline(m_device, m_deferredPipeline.pipeline, nullptr);
+    m_deferredPipeline.pipeline = VK_NULL_HANDLE;
+  }
+
 
   if(m_shadowPipeline.pipeline != VK_NULL_HANDLE)
   {
@@ -195,23 +258,45 @@ void SimpleShadowmapRender::SetupSimplePipeline()
   }
 
   vk_utils::GraphicsPipelineMaker maker;
-  
-  // pipeline for drawing objects
+
+  // pipeline for creating G-buffer
   //
+  maker.SetDefaultState(m_width, m_height, 2);
   std::unordered_map<VkShaderStageFlagBits, std::string> shader_paths;
   {
-    shader_paths[VK_SHADER_STAGE_FRAGMENT_BIT] = "../resources/shaders/simple_shadow.frag.spv";
+    shader_paths[VK_SHADER_STAGE_FRAGMENT_BIT] = "../resources/shaders/create_gbuffer.frag.spv";
     shader_paths[VK_SHADER_STAGE_VERTEX_BIT]   = "../resources/shaders/simple.vert.spv";
   }
   maker.LoadShaders(m_device, shader_paths);
 
-  m_basicForwardPipeline.layout = maker.MakeLayout(m_device, {m_dSetLayout}, sizeof(pushConst2M));
+  m_offscreenPipeline.layout = maker.MakeLayout(m_device, {m_gBufDSetLayout}, sizeof(pushConst2M));
+
+  m_offscreenPipeline.pipeline = maker.MakePipeline(m_device, m_pScnMgr->GetPipelineVertexInputStateCreateInfo(),
+                                                       m_pGBuffer->m_renderPass);
+                                                       //, {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR}
+
+  // pipeline for deferred stage
+  //
+  maker.SetDefaultState(m_width, m_height);
+  shader_paths.clear();
+  {
+    shader_paths[VK_SHADER_STAGE_FRAGMENT_BIT] = "../resources/shaders/simple_shadow.frag.spv";
+    shader_paths[VK_SHADER_STAGE_VERTEX_BIT]   = "../resources/shaders/quad.vert.spv";
+  }
+
+  maker.LoadShaders(m_device, shader_paths);
+
+  m_deferredPipeline.layout = maker.MakeLayout(m_device, {m_dSetLayout}, sizeof(pushConst2M));
+
   maker.SetDefaultState(m_width, m_height);
 
-  m_basicForwardPipeline.pipeline = maker.MakePipeline(m_device, m_pScnMgr->GetPipelineVertexInputStateCreateInfo(),
+  VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
+  vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO; // we only have a shader-hardcoded quad
+
+  m_deferredPipeline.pipeline = maker.MakePipeline(m_device, vertexInputInfo,
                                                        m_screenRenderPass);
                                                        //, {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR}
-  
+
   // pipeline for rendering objects to shadowmap
   //
   // maker.SetDefaultState(m_width, m_height);
@@ -223,9 +308,9 @@ void SimpleShadowmapRender::SetupSimplePipeline()
   maker.viewport.height = float(m_pShadowMap2->m_resolution.height);
   maker.scissor.extent  = VkExtent2D{ uint32_t(m_pShadowMap2->m_resolution.width), uint32_t(m_pShadowMap2->m_resolution.height) };
 
-  m_shadowPipeline.layout   = m_basicForwardPipeline.layout;
-  m_shadowPipeline.pipeline = maker.MakePipeline(m_device, m_pScnMgr->GetPipelineVertexInputStateCreateInfo(), 
-                                                 m_pShadowMap2->m_renderPass);                                                       
+  m_shadowPipeline.layout   = m_deferredPipeline.layout;
+  m_shadowPipeline.pipeline = maker.MakePipeline(m_device, m_pScnMgr->GetPipelineVertexInputStateCreateInfo(),
+                                                 m_pShadowMap2->m_renderPass);
 }
 
 void SimpleShadowmapRender::CreateUniformBuffer()
@@ -266,7 +351,7 @@ void SimpleShadowmapRender::DrawSceneCmd(VkCommandBuffer a_cmdBuff, const float4
   VkDeviceSize zero_offset = 0u;
   VkBuffer vertexBuf = m_pScnMgr->GetVertexBuffer();
   VkBuffer indexBuf  = m_pScnMgr->GetIndexBuffer();
-  
+
   vkCmdBindVertexBuffers(a_cmdBuff, 0, 1, &vertexBuf, &zero_offset);
   vkCmdBindIndexBuffer(a_cmdBuff, indexBuf, 0, VK_INDEX_TYPE_UINT32);
 
@@ -275,7 +360,7 @@ void SimpleShadowmapRender::DrawSceneCmd(VkCommandBuffer a_cmdBuff, const float4
   {
     auto inst         = m_pScnMgr->GetInstanceInfo(i);
     pushConst2M.model = m_pScnMgr->GetInstanceMatrix(i);
-    vkCmdPushConstants(a_cmdBuff, m_basicForwardPipeline.layout, stageFlags, 0, sizeof(pushConst2M), &pushConst2M);
+    vkCmdPushConstants(a_cmdBuff, m_deferredPipeline.layout, stageFlags, 0, sizeof(pushConst2M), &pushConst2M);
 
     auto mesh_info = m_pScnMgr->GetMeshInfo(inst.mesh_id);
     vkCmdDrawIndexed(a_cmdBuff, mesh_info.m_indNum, 1, mesh_info.m_indexOffset, mesh_info.m_vertexOffset, 0);
@@ -326,6 +411,22 @@ void SimpleShadowmapRender::BuildCommandBufferSimple(VkCommandBuffer a_cmdBuff, 
   }
   vkCmdEndRenderPass(a_cmdBuff);
 
+  //// draw scene to G-buffer
+  //
+  clear = {
+    { .color = {0.0f, 0.0f, 0.0f, 1.0f} },
+    { .color = {0.0f, 0.0f, 0.0f, 1.0f} },
+    { .depthStencil = {1.0f, 0} }
+  };
+  VkRenderPassBeginInfo renderToGBuffer = m_pGBuffer->GetRenderPassBeginInfo(0, clear);
+  vkCmdBeginRenderPass(a_cmdBuff, &renderToGBuffer, VK_SUBPASS_CONTENTS_INLINE);
+  {
+    vkCmdBindPipeline(a_cmdBuff, VK_PIPELINE_BIND_POINT_GRAPHICS, m_offscreenPipeline.pipeline);
+    vkCmdBindDescriptorSets(a_cmdBuff, VK_PIPELINE_BIND_POINT_GRAPHICS, m_offscreenPipeline.layout, 0, 1, &m_gBufDSet, 0, VK_NULL_HANDLE);
+    DrawSceneCmd(a_cmdBuff, m_worldViewProj);
+  }
+  vkCmdEndRenderPass(a_cmdBuff);
+
   //// draw final scene to screen
   //
   {
@@ -345,9 +446,15 @@ void SimpleShadowmapRender::BuildCommandBufferSimple(VkCommandBuffer a_cmdBuff, 
     vkCmdBeginRenderPass(a_cmdBuff, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
 
     vkCmdBindPipeline(a_cmdBuff, VK_PIPELINE_BIND_POINT_GRAPHICS, a_pipeline);
-    vkCmdBindDescriptorSets(a_cmdBuff, VK_PIPELINE_BIND_POINT_GRAPHICS, m_basicForwardPipeline.layout, 0, 1, &m_dSet, 0, VK_NULL_HANDLE);
+    vkCmdBindDescriptorSets(a_cmdBuff, VK_PIPELINE_BIND_POINT_GRAPHICS, m_deferredPipeline.layout, 0, 1, &m_dSet, 0, VK_NULL_HANDLE);
 
-    DrawSceneCmd(a_cmdBuff, m_worldViewProj);
+    {
+      VkShaderStageFlags stageFlags = (VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
+
+      vkCmdPushConstants(a_cmdBuff, m_deferredPipeline.layout, stageFlags, 0, sizeof(m_worldViewProj), &m_worldViewProj);
+
+      vkCmdDraw(a_cmdBuff, 3, 1, 0, 0);
+    }
 
     vkCmdEndRenderPass(a_cmdBuff);
   }
@@ -387,7 +494,7 @@ void SimpleShadowmapRender::CleanupPipelineAndSwapchain()
 
   vkDestroyRenderPass(m_device, m_screenRenderPass, nullptr);
 
-  //m_swapchain.Cleanup();
+  m_swapchain.Cleanup();
 }
 
 void SimpleShadowmapRender::RecreateSwapChain()
@@ -404,7 +511,7 @@ void SimpleShadowmapRender::RecreateSwapChain()
       VK_FORMAT_D24_UNORM_S8_UINT,
       VK_FORMAT_D16_UNORM_S8_UINT,
       VK_FORMAT_D16_UNORM
-  };                                                            
+  };
   vk_utils::getSupportedDepthFormat(m_physicalDevice, depthFormats, &m_depthBuffer.format);
 
   m_screenRenderPass = vk_utils::createDefaultRenderPass(m_device, m_swapchain.GetFormat(), m_depthBuffer.format);
@@ -424,31 +531,51 @@ void SimpleShadowmapRender::RecreateSwapChain()
   for (uint32_t i = 0; i < m_swapchain.GetImageCount(); ++i)
   {
     BuildCommandBufferSimple(m_cmdBuffersDrawMain[i], m_frameBuffers[i],
-                             m_swapchain.GetAttachment(i).view, m_basicForwardPipeline.pipeline);
+                             m_swapchain.GetAttachment(i).view, m_deferredPipeline.pipeline);
   }
 
 }
 
 void SimpleShadowmapRender::Cleanup()
 {
+  m_pGBuffer    = nullptr;
   m_pShadowMap2 = nullptr;
   m_pFSQuad     = nullptr; // smartptr delete it's resources
-  
+
   if(m_memShadowMap != VK_NULL_HANDLE)
   {
     vkFreeMemory(m_device, m_memShadowMap, VK_NULL_HANDLE);
     m_memShadowMap = VK_NULL_HANDLE;
   }
+  if(m_memGBuffer != VK_NULL_HANDLE)
+  {
+    vkFreeMemory(m_device, m_memGBuffer, VK_NULL_HANDLE);
+    m_memGBuffer = VK_NULL_HANDLE;
+  }
 
   CleanupPipelineAndSwapchain();
 
-  if (m_basicForwardPipeline.pipeline != VK_NULL_HANDLE)
+  if (m_deferredPipeline.pipeline != VK_NULL_HANDLE)
   {
-    vkDestroyPipeline(m_device, m_basicForwardPipeline.pipeline, nullptr);
+    vkDestroyPipeline(m_device, m_deferredPipeline.pipeline, nullptr);
   }
-  if (m_basicForwardPipeline.layout != VK_NULL_HANDLE)
+  if (m_deferredPipeline.layout != VK_NULL_HANDLE)
   {
-    vkDestroyPipelineLayout(m_device, m_basicForwardPipeline.layout, nullptr);
+    vkDestroyPipelineLayout(m_device, m_deferredPipeline.layout, nullptr);
+  }
+
+  if (m_offscreenPipeline.pipeline != VK_NULL_HANDLE)
+  {
+    vkDestroyPipeline(m_device, m_offscreenPipeline.pipeline, nullptr);
+  }
+  if (m_offscreenPipeline.layout != VK_NULL_HANDLE)
+  {
+    vkDestroyPipelineLayout(m_device, m_offscreenPipeline.layout, nullptr);
+  }
+
+  if (m_shadowPipeline.pipeline != VK_NULL_HANDLE)
+  {
+    vkDestroyPipeline(m_device, m_shadowPipeline.pipeline, nullptr);
   }
 
   if (m_presentationResources.imageAvailable != VK_NULL_HANDLE)
@@ -464,6 +591,8 @@ void SimpleShadowmapRender::Cleanup()
   {
     vkDestroyCommandPool(m_device, m_commandPool, nullptr);
   }
+
+  vkDestroySurfaceKHR(m_instance, m_surface, nullptr);
 }
 
 void SimpleShadowmapRender::ProcessInput(const AppInput &input)
@@ -491,7 +620,7 @@ void SimpleShadowmapRender::ProcessInput(const AppInput &input)
     for (uint32_t i = 0; i < m_framesInFlight; ++i)
     {
       BuildCommandBufferSimple(m_cmdBuffersDrawMain[i], m_frameBuffers[i],
-                               m_swapchain.GetAttachment(i).view, m_basicForwardPipeline.pipeline);
+                               m_swapchain.GetAttachment(i).view, m_deferredPipeline.pipeline);
     }
   }
 }
@@ -501,7 +630,7 @@ void SimpleShadowmapRender::UpdateCamera(const Camera* cams, uint32_t a_camsNumb
   m_cam = cams[0];
   if(a_camsNumber >= 2)
     m_light.cam = cams[1];
-  UpdateView(); 
+  UpdateView();
 }
 
 void SimpleShadowmapRender::UpdateView()
@@ -513,9 +642,9 @@ void SimpleShadowmapRender::UpdateView()
   auto mProj = projectionMatrix(m_cam.fov, aspect, 0.1f, 1000.0f);
   auto mLookAt = LiteMath::lookAt(m_cam.pos, m_cam.lookAt, m_cam.up);
   auto mWorldViewProj = mProjFix * mProj * mLookAt;
-  
+
   m_worldViewProj = mWorldViewProj;
-  
+
   ///// calc light matrix
   //
   if(m_light.usePerspectiveM)
@@ -523,11 +652,11 @@ void SimpleShadowmapRender::UpdateView()
   else
     mProj = ortoMatrix(-m_light.radius, +m_light.radius, -m_light.radius, +m_light.radius, 0.0f, m_light.lightTargetDist);
 
-  if(m_light.usePerspectiveM)  // don't understang why fix is not needed for perspective case for shadowmap ... it works for common rendering  
+  if(m_light.usePerspectiveM)  // don't understang why fix is not needed for perspective case for shadowmap ... it works for common rendering
     mProjFix = LiteMath::float4x4();
   else
-    mProjFix = OpenglToVulkanProjectionMatrixFix(); 
-  
+    mProjFix = OpenglToVulkanProjectionMatrixFix();
+
   mLookAt       = LiteMath::lookAt(m_light.cam.pos, m_light.cam.pos + m_light.cam.forward()*10.0f, m_light.cam.up);
   m_lightMatrix = mProjFix*mProj*mLookAt;
 }
@@ -550,7 +679,7 @@ void SimpleShadowmapRender::LoadScene(const char* path, bool transpose_inst_matr
   for (uint32_t i = 0; i < m_framesInFlight; ++i)
   {
     BuildCommandBufferSimple(m_cmdBuffersDrawMain[i], m_frameBuffers[i],
-                             m_swapchain.GetAttachment(i).view, m_basicForwardPipeline.pipeline);
+                             m_swapchain.GetAttachment(i).view, m_deferredPipeline.pipeline);
   }
 }
 
@@ -568,7 +697,7 @@ void SimpleShadowmapRender::DrawFrameSimple()
   VkPipelineStageFlags waitStages[] = {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
 
   BuildCommandBufferSimple(currentCmdBuf, m_frameBuffers[imageIdx], m_swapchain.GetAttachment(imageIdx).view,
-                           m_basicForwardPipeline.pipeline);
+                           m_deferredPipeline.pipeline);
 
   VkSubmitInfo submitInfo = {};
   submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
