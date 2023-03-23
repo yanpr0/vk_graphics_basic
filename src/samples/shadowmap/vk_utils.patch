@@ -1,0 +1,13 @@
+diff --git a/vk_fbuf_attachment.cpp b/vk_fbuf_attachment.cpp
+index a6330a7..b6b7963 100644
+--- a/vk_fbuf_attachment.cpp
++++ b/vk_fbuf_attachment.cpp
+@@ -85,7 +85,7 @@ namespace vk_utils
+     attachment.description.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+     attachment.description.format = a_info.format;
+     attachment.description.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+-    attachment.description.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
++    attachment.description.finalLayout = VK_IMAGE_LAYOUT_GENERAL;
+ 
+     if (!vk_utils::isDepthFormat(a_info.format) && !vk_utils::isStencilFormat(a_info.format))
+     {

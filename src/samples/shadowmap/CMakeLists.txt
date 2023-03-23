@@ -23,3 +23,11 @@ else()
     target_link_libraries(shadowmap_renderer PRIVATE project_options
                           volk glfw project_warnings) #
 endif()
+
+add_custom_target(
+    vk_utils_patch
+    COMMAND git apply ${CMAKE_SOURCE_DIR}/src/samples/shadowmap/vk_utils.patch || echo VK_UTILS_PATCH IS ALREADY APPLIED!!!
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/external/vkutils
+)
+add_dependencies(shadowmap_renderer vk_utils_patch)
+
