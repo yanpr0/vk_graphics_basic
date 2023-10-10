@@ -4,6 +4,7 @@
 #define VK_NO_PROTOTYPES
 #include "../../render/scene_mgr.h"
 #include "../../render/render_common.h"
+#include "../../render/render_gui.h"
 #include "../../../resources/shaders/common.h"
 #include <geom/vk_mesh.h>
 #include <vk_descriptor_sets.h>
@@ -18,6 +19,9 @@
 class SimpleShadowmapRender : public IRender
 {
 public:
+  const std::string VERTEX_SHADER_PATH = "../resources/shaders/simple.vert";
+  const std::string FRAGMENT_SHADER_PATH = "../resources/shaders/simple_shadow.frag";
+
   SimpleShadowmapRender(uint32_t a_width, uint32_t a_height);
   ~SimpleShadowmapRender()  { Cleanup(); };
 
@@ -111,6 +115,12 @@ private:
   std::vector<VkFramebuffer> m_frameBuffers;
   vk_utils::VulkanImageMem m_depthBuffer{}; // screen depthbuffer
 
+  // *** GUI
+  std::shared_ptr<IRenderGUI> m_pGUIRender;
+  void SetupGUIElements();
+  void DrawFrameWithGUI();
+  //
+
   Camera   m_cam;
   uint32_t m_width  = 1024u;
   uint32_t m_height = 1024u;
@@ -149,8 +159,8 @@ private:
   {
     ShadowMapCam() 
     {  
-      cam.pos    = float3(4.0f, 4.0f, 4.0f);
-      cam.lookAt = float3(0, 0, 0);
+      cam.pos    = float3(1.0f, 0.0f, 4.0f);
+      cam.lookAt = float3(0, 0, -1);
       cam.up     = float3(0, 1, 0);
   
       radius          = 5.0f;

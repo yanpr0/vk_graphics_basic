@@ -24,7 +24,10 @@ struct UniformParams
   mat4  lightMatrix;
   vec3  lightPos;
   float time;
+  vec3  lightDir;
   vec3  baseColor;
+  float spotlightInnerAngle;
+  float spotlightOuterAngle;
   bool animateLightColor;
 };
 
