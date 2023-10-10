@@ -12,56 +12,56 @@ layout (std430, binding = 0) readonly buffer Kernel
     float kernelCoefs[];
 };
 
-layout (binding = 1, rgba8) uniform readonly image2D inImg;
-layout (binding = 2, rgba8) uniform writeonly image2D outImg;
+layout (binding = 1, rg32f) uniform readonly image2D inImg;
+layout (binding = 2, rg32f) uniform writeonly image2D outImg;
 
 float kernel(int i)
 {
     return kernelCoefs[abs(i)];
 }
 
-shared vec3 locImg[r + WG + r][r + WG + r];
+shared vec2 locImg[r + WG + r][r + WG + r];
 
 void loadToLoc(ivec2 xy, ivec2 XY, ivec2 HW)
 {
-    locImg[r + xy.y][r + xy.x] = imageLoad(inImg, XY).xyz;
+    locImg[r + xy.y][r + xy.x] = imageLoad(inImg, XY).xy;
     if (xy.x < r) // left
     {
-        locImg[r + xy.y][xy.x] = (XY.x >= r) ? imageLoad(inImg, XY + ivec2(-r, 0)).xyz : vec3(0.0f);
+        locImg[r + xy.y][xy.x] = (XY.x >= r) ? imageLoad(inImg, XY + ivec2(-r, 0)).xy : vec2(0.0f);
     }
     if (xy.y < r) // up
     {
-        locImg[xy.y][r + xy.x] = (XY.y >= r) ? imageLoad(inImg, XY + ivec2(0, -r)).xyz : vec3(0.0f);
+        locImg[xy.y][r + xy.x] = (XY.y >= r) ? imageLoad(inImg, XY + ivec2(0, -r)).xy : vec2(0.0f);
     }
     if (xy.x + r >= WG) // right
     {
-        locImg[r + xy.y][r + xy.x + r] = (XY.x + r < HW.x) ? imageLoad(inImg, XY + ivec2(r, 0)).xyz : vec3(0.0f);
+        locImg[r + xy.y][r + xy.x + r] = (XY.x + r < HW.x) ? imageLoad(inImg, XY + ivec2(r, 0)).xy : vec2(0.0f);
     }
     if (xy.y + r >= WG) // down
     {
-        locImg[r + xy.y + r][r + xy.x] = (XY.y + r < HW.y) ? imageLoad(inImg, XY + ivec2(0, r)).xyz : vec3(0.0f);
+        locImg[r + xy.y + r][r + xy.x] = (XY.y + r < HW.y) ? imageLoad(inImg, XY + ivec2(0, r)).xy : vec2(0.0f);
     }
     if (xy.x < r && xy.y < r) // left-up
     {
-        locImg[xy.y][xy.x] = (XY.x >= r && XY.y >= r) ? imageLoad(inImg, XY + ivec2(-r, -r)).xyz : vec3(0.0f);
+        locImg[xy.y][xy.x] = (XY.x >= r && XY.y >= r) ? imageLoad(inImg, XY + ivec2(-r, -r)).xy : vec2(0.0f);
     }
     if (xy.x < r && xy.y + r >= WG) // left-down
     {
-        locImg[r + xy.y + r][xy.x] = (XY.x >= r && XY.y + r < HW.y) ? imageLoad(inImg, XY + ivec2(-r, r)).xyz : vec3(0.0f);
+        locImg[r + xy.y + r][xy.x] = (XY.x >= r && XY.y + r < HW.y) ? imageLoad(inImg, XY + ivec2(-r, r)).xy : vec2(0.0f);
     }
     if (xy.x + r >= WG && xy.y < r) // right-up
     {
-        locImg[xy.y][r + xy.x + r] = (XY.x + r < HW.x && XY.y >= r) ? imageLoad(inImg, XY + ivec2(r, -r)).xyz : vec3(0.0f);
+        locImg[xy.y][r + xy.x + r] = (XY.x + r < HW.x && XY.y >= r) ? imageLoad(inImg, XY + ivec2(r, -r)).xy : vec2(0.0f);
     }
     if (xy.x + r >= WG && xy.y + r >= WG) // right-down
     {
-        locImg[r + xy.y + r][r + xy.x + r] = (XY.x + r < HW.x && XY.y + r < HW.y) ? imageLoad(inImg, XY + ivec2(r, r)).xyz : vec3(0.0f);
+        locImg[r + xy.y + r][r + xy.x + r] = (XY.x + r < HW.x && XY.y + r < HW.y) ? imageLoad(inImg, XY + ivec2(r, r)).xy : vec2(0.0f);
     }
 }
 
 void horizontalPass(ivec2 xy, ivec2 XY, ivec2 HW)
 {
-    vec3 sum = vec3(0.0f);
+    vec2 sum = vec2(0.0f);
     float norm = 0.0f;
     for (int x = -r; x <= r; ++x)
     {
@@ -77,7 +77,7 @@ void horizontalPass(ivec2 xy, ivec2 XY, ivec2 HW)
 
 void verticalPass(ivec2 xy, ivec2 XY, ivec2 HW)
 {
-    vec3 sum = vec3(0.0f);
+    vec2 sum = vec2(0.0f);
     float norm = 0.0f;
     for (int y = -r; y <= r; ++y)
     {
@@ -120,7 +120,7 @@ void main()
 
         barrier();
 
-        imageStore(outImg, XY, vec4(locImg[r + xy.y][r + xy.x], 1.0));
+        imageStore(outImg, XY, vec4(locImg[r + xy.y][r + xy.x], 0.0, 0.0));
     }
 }
 

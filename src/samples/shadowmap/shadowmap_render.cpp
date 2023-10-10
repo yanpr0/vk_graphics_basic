@@ -78,6 +78,19 @@ void SimpleShadowmapRender::InitPresentation(VkSurfaceKHR &a_surface, bool initG
   VK_CHECK_RESULT(vkCreateSemaphore(m_device, &semaphoreInfo, nullptr, &m_presentationResources.imageAvailable));
   VK_CHECK_RESULT(vkCreateSemaphore(m_device, &semaphoreInfo, nullptr, &m_presentationResources.renderingFinished));
 
+  // default
+  std::vector<VkFormat> depthFormats = {
+    VK_FORMAT_D32_SFLOAT,
+    VK_FORMAT_D32_SFLOAT_S8_UINT,
+    VK_FORMAT_D24_UNORM_S8_UINT,
+    VK_FORMAT_D16_UNORM_S8_UINT,
+    VK_FORMAT_D16_UNORM
+  };
+  vk_utils::getSupportedDepthFormat(m_physicalDevice, depthFormats, &m_depthBuffer.format);
+  m_screenRenderPass = vk_utils::createDefaultRenderPass(m_device, m_swapchain.GetFormat(), m_depthBuffer.format);
+  m_depthBuffer  = vk_utils::createDepthTexture(m_device, m_physicalDevice, m_width, m_height, m_depthBuffer.format);
+  m_frameBuffers = vk_utils::createFrameBuffers(m_device, m_swapchain, m_screenRenderPass, m_depthBuffer.view);
+
   // create full screen quad for debug purposes
   //
   m_pFSQuad = std::make_shared<vk_utils::QuadRenderer>(0,0, 512, 512);
@@ -87,54 +100,21 @@ void SimpleShadowmapRender::InitPresentation(VkSurfaceKHR &a_surface, bool initG
 
   // create shadow map
   //
-  m_pShadowMap2 = std::make_shared<vk_utils::RenderTarget>(m_device, VkExtent2D{2048, 2048});
+  m_pShadowMap = std::make_shared<vk_utils::RenderTarget>(m_device, VkExtent2D{2048, 2048});
 
   vk_utils::AttachmentInfo infoDepth;
   infoDepth.format           = VK_FORMAT_D16_UNORM;
   infoDepth.usage            = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
   infoDepth.imageSampleCount = VK_SAMPLE_COUNT_1_BIT;
-  m_shadowMapId              = m_pShadowMap2->CreateAttachment(infoDepth);
-  auto memReq                = m_pShadowMap2->GetMemoryRequirements()[0]; // we know that we have only one texture
+  m_shadowMapId              = m_pShadowMap->CreateAttachment(infoDepth);
 
-  // memory for all shadowmaps (well, if you have them more than 1 ...)
-  {
-    VkMemoryAllocateInfo allocateInfo = {};
-    allocateInfo.sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    allocateInfo.pNext           = nullptr;
-    allocateInfo.allocationSize  = memReq.size;
-    allocateInfo.memoryTypeIndex = vk_utils::findMemoryType(memReq.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, m_physicalDevice);
+  vk_utils::AttachmentInfo infoPreVSM;
+  infoPreVSM.format           = VK_FORMAT_R32G32_SFLOAT;
+  infoPreVSM.usage            = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT;
+  infoPreVSM.imageSampleCount = VK_SAMPLE_COUNT_1_BIT;
+  m_preVSMId                  = m_pShadowMap->CreateAttachment(infoPreVSM);
 
-    VK_CHECK_RESULT(vkAllocateMemory(m_device, &allocateInfo, NULL, &m_memShadowMap));
-  }
-
-  m_pShadowMap2->CreateViewAndBindMemory(m_memShadowMap, {0});
-  m_pShadowMap2->CreateDefaultSampler();
-  m_pShadowMap2->CreateDefaultRenderPass();
-
-  if (initGUI)
-  {
-    m_pGUIRender = std::make_shared<ImGuiRender>(m_instance, m_device, m_physicalDevice, m_queueFamilyIDXs.graphics, m_graphicsQueue, m_swapchain);
-  }
-
-  // create preprocessing pass
-  //
-  m_pPreproc = std::make_shared<vk_utils::RenderTarget>(m_device, VkExtent2D{m_width, m_height});
-
-  {
-    vk_utils::AttachmentInfo infoPreproc;
-    infoPreproc.format           = VK_FORMAT_B8G8R8A8_UNORM;
-    infoPreproc.usage            = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT;
-    infoPreproc.imageSampleCount = VK_SAMPLE_COUNT_1_BIT;
-    m_preprocId                  = m_pPreproc->CreateAttachment(infoPreproc);
-  }
-  {
-    infoDepth.format           = VK_FORMAT_D16_UNORM;
-    infoDepth.usage            = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
-    infoDepth.imageSampleCount = VK_SAMPLE_COUNT_1_BIT;
-    m_depthId                  = m_pPreproc->CreateAttachment(infoDepth);
-  }
-
-  auto memReqs = m_pPreproc->GetMemoryRequirements();
+  auto memReqs = m_pShadowMap->GetMemoryRequirements();
   std::uint32_t size1 = memReqs[0].size + (memReqs[1].alignment - memReqs[0].size % memReqs[1].alignment) % memReqs[1].alignment;
 
   // memory for all components
@@ -145,16 +125,23 @@ void SimpleShadowmapRender::InitPresentation(VkSurfaceKHR &a_surface, bool initG
     allocateInfo.allocationSize  = size1 + memReqs[1].size;
     allocateInfo.memoryTypeIndex = vk_utils::findMemoryType(memReqs[0].memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, m_physicalDevice);
 
-    VK_CHECK_RESULT(vkAllocateMemory(m_device, &allocateInfo, NULL, &m_memPreproc));
+    VK_CHECK_RESULT(vkAllocateMemory(m_device, &allocateInfo, NULL, &m_memShadowMap));
   }
 
-  m_pPreproc->CreateViewAndBindMemory(m_memPreproc, {0, size1});
-  m_pPreproc->CreateDefaultRenderPass();
+  m_pShadowMap->CreateViewAndBindMemory(m_memShadowMap, {0, size1});
+  m_pShadowMap->CreateDefaultSampler();
+  m_pShadowMap->CreateDefaultRenderPass();
+
+  if (initGUI)
+  {
+    m_pGUIRender = std::make_shared<ImGuiRender>(m_instance, m_device, m_physicalDevice, m_queueFamilyIDXs.graphics, m_graphicsQueue, m_swapchain);
+  }
 
   // proc part
   //
-  m_procImg.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-  vk_utils::createImgAllocAndBind(m_device, m_physicalDevice, m_width, m_height, VK_FORMAT_B8G8R8A8_UNORM, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, &m_procImg);
+  m_VSM.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+  vk_utils::createImgAllocAndBind(m_device, m_physicalDevice, 2048, 2048, VK_FORMAT_R32G32_SFLOAT,
+                                  VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT | VK_IMAGE_USAGE_STORAGE_BIT, &m_VSM);
 }
 
 void SimpleShadowmapRender::CreateInstance()
@@ -193,30 +180,31 @@ void SimpleShadowmapRender::SetupSimplePipeline()
 {
   std::vector<std::pair<VkDescriptorType, uint32_t> > dtypes = {
       {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,             1},
-      {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,     2},
+      {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,     3},
       {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,              2},
       {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,             1}
   };
 
   m_pBindings = std::make_shared<vk_utils::DescriptorMaker>(m_device, dtypes, 3);
 
-  auto shadowMap = m_pShadowMap2->m_attachments[m_shadowMapId];
+  auto shadowMap = m_pShadowMap->m_attachments[m_shadowMapId];
 
   m_pBindings->BindBegin(VK_SHADER_STAGE_FRAGMENT_BIT);
   m_pBindings->BindBuffer(0, m_ubo, VK_NULL_HANDLE, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
-  m_pBindings->BindImage (1, shadowMap.view, m_pShadowMap2->m_sampler, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_IMAGE_LAYOUT_GENERAL);
+  m_pBindings->BindImage (1, shadowMap.view, m_pShadowMap->m_sampler, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_IMAGE_LAYOUT_GENERAL);
+  m_pBindings->BindImage (2, m_VSM.view, m_pShadowMap->m_sampler, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_IMAGE_LAYOUT_GENERAL);
   m_pBindings->BindEnd(&m_dSet, &m_dSetLayout);
 
   m_pBindings->BindBegin(VK_SHADER_STAGE_COMPUTE_BIT);
   m_pBindings->BindBuffer(0, m_kernelBuf, VK_NULL_HANDLE, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
-  m_pBindings->BindImage (1, m_pPreproc->m_attachments[m_preprocId].view, VK_NULL_HANDLE, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_IMAGE_LAYOUT_GENERAL);
-  m_pBindings->BindImage (2, m_procImg.view, VK_NULL_HANDLE, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_IMAGE_LAYOUT_GENERAL);
+  m_pBindings->BindImage (1, m_pShadowMap->m_attachments[m_preVSMId].view, VK_NULL_HANDLE, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_IMAGE_LAYOUT_GENERAL);
+  m_pBindings->BindImage (2, m_VSM.view, VK_NULL_HANDLE, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_IMAGE_LAYOUT_GENERAL);
   m_pBindings->BindEnd(&m_computeDSet, &m_computeDSetLayout);
 
   //m_pBindings->BindImage(0, m_GBufTarget->m_attachments[m_GBuf_idx[GBUF_ATTACHMENT::POS_Z]].view, m_GBufTarget->m_sampler, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
 
   m_pBindings->BindBegin(VK_SHADER_STAGE_FRAGMENT_BIT);
-  m_pBindings->BindImage(0, shadowMap.view, m_pShadowMap2->m_sampler, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_IMAGE_LAYOUT_GENERAL);
+  m_pBindings->BindImage(0, shadowMap.view, m_pShadowMap->m_sampler, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_IMAGE_LAYOUT_GENERAL);
   m_pBindings->BindEnd(&m_quadDS, &m_quadDSLayout);
 
   // if we are recreating pipeline (for example, to reload shaders)
@@ -241,7 +229,6 @@ void SimpleShadowmapRender::SetupSimplePipeline()
     vkDestroyPipeline(m_device, m_computePipeline.pipeline, nullptr);
     m_computePipeline.pipeline = VK_NULL_HANDLE;
   }
-
   if(m_shadowPipeline.pipeline != VK_NULL_HANDLE)
   {
     vkDestroyPipeline(m_device, m_shadowPipeline.pipeline, nullptr);
@@ -270,23 +257,24 @@ void SimpleShadowmapRender::SetupSimplePipeline()
 
   m_basicForwardPipeline.layout = maker.MakeLayout(m_device, {m_dSetLayout}, sizeof(pushConst2M));
   m_basicForwardPipeline.pipeline = maker.MakePipeline(m_device, m_pScnMgr->GetPipelineVertexInputStateCreateInfo(),
-                                                       m_pPreproc->m_renderPass);
+                                                       m_screenRenderPass);
                                                        //, {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR}
 
   // pipeline for rendering objects to shadowmap
   //
-  maker.SetDefaultState(m_width, m_height);
+  maker.SetDefaultState(2048, 2048);
   shader_paths.clear();
+  shader_paths[VK_SHADER_STAGE_FRAGMENT_BIT] = "../resources/shaders/simple_vsm.frag.spv";
   shader_paths[VK_SHADER_STAGE_VERTEX_BIT] = "../resources/shaders/simple.vert.spv";
   maker.LoadShaders(m_device, shader_paths);
 
-  maker.viewport.width  = float(m_pShadowMap2->m_resolution.width);
-  maker.viewport.height = float(m_pShadowMap2->m_resolution.height);
-  maker.scissor.extent  = VkExtent2D{ uint32_t(m_pShadowMap2->m_resolution.width), uint32_t(m_pShadowMap2->m_resolution.height) };
+  maker.viewport.width  = float(m_pShadowMap->m_resolution.width);
+  maker.viewport.height = float(m_pShadowMap->m_resolution.height);
+  maker.scissor.extent  = VkExtent2D{ uint32_t(m_pShadowMap->m_resolution.width), uint32_t(m_pShadowMap->m_resolution.height) };
 
   m_shadowPipeline.layout   = m_basicForwardPipeline.layout;
   m_shadowPipeline.pipeline = maker.MakePipeline(m_device, m_pScnMgr->GetPipelineVertexInputStateCreateInfo(),
-                                                 m_pShadowMap2->m_renderPass);
+                                                 m_pShadowMap->m_renderPass);
 }
 
 void SimpleShadowmapRender::CreateBuffers()
@@ -369,7 +357,7 @@ void SimpleShadowmapRender::DrawSceneCmd(VkCommandBuffer a_cmdBuff, const float4
   }
 }
 
-void SimpleShadowmapRender::BuildCommandBufferSimple(VkCommandBuffer a_cmdBuff, VkImage a_targetImage,
+void SimpleShadowmapRender::BuildCommandBufferSimple(VkCommandBuffer a_cmdBuff, VkFramebuffer a_frameBuff,
                                                      VkImageView a_targetImageView, VkPipeline a_pipeline)
 {
   vkResetCommandBuffer(a_cmdBuff, 0);
@@ -404,8 +392,11 @@ void SimpleShadowmapRender::BuildCommandBufferSimple(VkCommandBuffer a_cmdBuff, 
   VkClearValue clearDepth = {};
   clearDepth.depthStencil.depth   = 1.0f;
   clearDepth.depthStencil.stencil = 0;
-  std::vector<VkClearValue> clear =  {clearDepth};
-  VkRenderPassBeginInfo renderToShadowMap = m_pShadowMap2->GetRenderPassBeginInfo(0, clear);
+  VkClearValue clearColor = {};
+  clearColor.color = {0.0f, 0.0f, 0.0f, 1.0f};
+  std::vector<VkClearValue> clear =  {clearDepth, clearColor};
+
+  VkRenderPassBeginInfo renderToShadowMap = m_pShadowMap->GetRenderPassBeginInfo(0, clear);
   vkCmdBeginRenderPass(a_cmdBuff, &renderToShadowMap, VK_SUBPASS_CONTENTS_INLINE);
   {
     vkCmdBindPipeline(a_cmdBuff, VK_PIPELINE_BIND_POINT_GRAPHICS, m_shadowPipeline.pipeline);
@@ -413,152 +404,191 @@ void SimpleShadowmapRender::BuildCommandBufferSimple(VkCommandBuffer a_cmdBuff, 
   }
   vkCmdEndRenderPass(a_cmdBuff);
 
+  if (m_uniforms.vsm)
+  {
+    {
+      VkImageMemoryBarrier barriers[2] = {};
+
+      VkImageMemoryBarrier* barrier = &barriers[0];
+      barrier->sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+      barrier->srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+      barrier->dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+      barrier->oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+      barrier->newLayout = VK_IMAGE_LAYOUT_GENERAL;
+      barrier->srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+      barrier->dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+      barrier->image = m_pShadowMap->m_attachments[m_preVSMId].image;
+      barrier->subresourceRange = VkImageSubresourceRange{ VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+
+      barrier = &barriers[1];
+      barrier->sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+      barrier->srcAccessMask = VK_ACCESS_NONE;
+      barrier->dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+      barrier->oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+      barrier->newLayout = VK_IMAGE_LAYOUT_GENERAL;
+      barrier->srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+      barrier->dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+      barrier->image = m_VSM.image;
+      barrier->subresourceRange = VkImageSubresourceRange{ VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+
+      vkCmdPipelineBarrier(
+          a_cmdBuff,
+          VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+          VK_DEPENDENCY_BY_REGION_BIT,
+          0, nullptr,
+          0, nullptr,
+          2, barriers
+          );
+    }
+
+    vkCmdBindPipeline(a_cmdBuff, VK_PIPELINE_BIND_POINT_COMPUTE, m_computePipeline.pipeline);
+    vkCmdBindDescriptorSets(a_cmdBuff, VK_PIPELINE_BIND_POINT_COMPUTE, m_computePipeline.layout, 0, 1, &m_computeDSet, 0, VK_NULL_HANDLE);
+    const std::size_t WG_SIZE = 32;
+    vkCmdDispatch(a_cmdBuff, (2048 + WG_SIZE - 1) / WG_SIZE, (2048 + WG_SIZE - 1) / WG_SIZE, 1);
+
+    {
+      VkImageMemoryBarrier barriers[1] = {};
+
+      VkImageMemoryBarrier* barrier = &barriers[0];
+      barrier->sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+      barrier->srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+      barrier->dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+      barrier->oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+      barrier->newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+      barrier->srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+      barrier->dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+      barrier->image = m_VSM.image;
+      barrier->subresourceRange = VkImageSubresourceRange{ VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+
+      vkCmdPipelineBarrier(
+          a_cmdBuff,
+          VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+          VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+          VK_DEPENDENCY_BY_REGION_BIT,
+          0, nullptr,
+          0, nullptr,
+          1, barriers
+          );
+    }
+  }
+  else
+  {
+    {
+      VkImageMemoryBarrier barriers[2] = {};
+
+      VkImageMemoryBarrier* barrier = &barriers[0];
+      barrier->sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+      barrier->srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+      barrier->dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+      barrier->oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+      barrier->newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+      barrier->srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+      barrier->dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+      barrier->image = m_pShadowMap->m_attachments[m_preVSMId].image;
+      barrier->subresourceRange = VkImageSubresourceRange{ VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+
+      barrier = &barriers[1];
+      barrier->sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+      barrier->srcAccessMask = VK_ACCESS_NONE;
+      barrier->dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+      barrier->oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+      barrier->newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+      barrier->srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+      barrier->dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+      barrier->image = m_VSM.image;
+      barrier->subresourceRange = VkImageSubresourceRange{ VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+
+      vkCmdPipelineBarrier(
+          a_cmdBuff,
+          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+          VK_PIPELINE_STAGE_TRANSFER_BIT,
+          VK_DEPENDENCY_BY_REGION_BIT,
+          0, nullptr,
+          0, nullptr,
+          2, barriers
+          );
+    }
+
+    VkImageCopy imageCopy {
+      VkImageSubresourceLayers{ VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 },
+        {0, 0, 0},
+        VkImageSubresourceLayers{ VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 },
+        {0, 0, 0},
+        {2048, 2048, 1}
+    };
+
+    vkCmdCopyImage(
+        a_cmdBuff,
+        m_pShadowMap->m_attachments[m_preVSMId].image,
+        VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+        m_VSM.image,
+        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        1,
+        &imageCopy
+        );
+
+    {
+      VkImageMemoryBarrier barriers[2] = {};
+
+      VkImageMemoryBarrier* barrier = &barriers[0];
+      barrier->sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+      barrier->srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+      barrier->dstAccessMask = VK_ACCESS_NONE;
+      barrier->oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+      barrier->newLayout = VK_IMAGE_LAYOUT_GENERAL;
+      barrier->srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+      barrier->dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+      barrier->image = m_pShadowMap->m_attachments[m_preVSMId].image;
+      barrier->subresourceRange = VkImageSubresourceRange{ VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+
+      barrier = &barriers[1];
+      barrier->sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+      barrier->srcAccessMask = VK_ACCESS_NONE;
+      barrier->dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+      barrier->oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+      barrier->newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+      barrier->srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+      barrier->dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+      barrier->image = m_VSM.image;
+      barrier->subresourceRange = VkImageSubresourceRange{ VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+
+      vkCmdPipelineBarrier(
+          a_cmdBuff,
+          VK_PIPELINE_STAGE_TRANSFER_BIT,
+          VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+          VK_DEPENDENCY_BY_REGION_BIT,
+          0, nullptr,
+          0, nullptr,
+          2, barriers
+          );
+    }
+  }
+
   //// draw final scene to screen
   //
-  clear = {
-    { .color = {0.0f, 0.0f, 0.0f, 1.0f} },
-    { .depthStencil = {1.0f, 0} }
-  };
-  VkRenderPassBeginInfo renderToPreproc = m_pPreproc->GetRenderPassBeginInfo(0, clear);
-  vkCmdBeginRenderPass(a_cmdBuff, &renderToPreproc, VK_SUBPASS_CONTENTS_INLINE);
   {
+    VkRenderPassBeginInfo renderPassInfo = {};
+    renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    renderPassInfo.renderPass = m_screenRenderPass;
+    renderPassInfo.framebuffer = a_frameBuff;
+    renderPassInfo.renderArea.offset = {0, 0};
+    renderPassInfo.renderArea.extent = m_swapchain.GetExtent();
+
+    VkClearValue clearValues[2] = {};
+    clearValues[0].color = {0.0f, 0.0f, 0.0f, 1.0f};
+    clearValues[1].depthStencil = {1.0f, 0};
+    renderPassInfo.clearValueCount = 2;
+    renderPassInfo.pClearValues    = &clearValues[0];
+
+    vkCmdBeginRenderPass(a_cmdBuff, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+
     vkCmdBindPipeline(a_cmdBuff, VK_PIPELINE_BIND_POINT_GRAPHICS, a_pipeline);
     vkCmdBindDescriptorSets(a_cmdBuff, VK_PIPELINE_BIND_POINT_GRAPHICS, m_basicForwardPipeline.layout, 0, 1, &m_dSet, 0, VK_NULL_HANDLE);
+
     DrawSceneCmd(a_cmdBuff, m_worldViewProj);
-  }
-  vkCmdEndRenderPass(a_cmdBuff);
 
-  {
-    VkImageMemoryBarrier barriers[2] = {};
-
-    VkImageMemoryBarrier* barrier = &barriers[0];
-    barrier->sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    barrier->srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-    barrier->dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-    barrier->oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-    barrier->newLayout = VK_IMAGE_LAYOUT_GENERAL;
-    barrier->srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier->dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier->image = m_pPreproc->m_attachments[m_preprocId].image;
-    barrier->subresourceRange = VkImageSubresourceRange{ VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
-
-    barrier = &barriers[1];
-    barrier->sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    barrier->srcAccessMask = VK_ACCESS_NONE;
-    barrier->dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-    barrier->oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    barrier->newLayout = VK_IMAGE_LAYOUT_GENERAL;
-    barrier->srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier->dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier->image = m_procImg.image;
-    barrier->subresourceRange = VkImageSubresourceRange{ VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
-
-    vkCmdPipelineBarrier(
-      a_cmdBuff,
-      VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-      VK_DEPENDENCY_BY_REGION_BIT,
-      0, nullptr,
-      0, nullptr,
-      2, barriers
-    );
-  }
-
-  vkCmdBindPipeline(a_cmdBuff, VK_PIPELINE_BIND_POINT_COMPUTE, m_computePipeline.pipeline);
-  vkCmdBindDescriptorSets(a_cmdBuff, VK_PIPELINE_BIND_POINT_COMPUTE, m_computePipeline.layout, 0, 1, &m_computeDSet, 0, VK_NULL_HANDLE);
-  const std::size_t WG_SIZE = 32;
-  ext = m_swapchain.GetExtent();
-  vkCmdDispatch(a_cmdBuff, (ext.width + WG_SIZE - 1) / WG_SIZE, (ext.height + WG_SIZE - 1) / WG_SIZE, 1);
-
-  {
-    VkImageMemoryBarrier barriers[2] = {};
-
-    VkImageMemoryBarrier* barrier = &barriers[0];
-    barrier->sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    barrier->srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-    barrier->dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-    barrier->oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-    barrier->newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-    barrier->srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier->dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier->image = m_procImg.image;
-    barrier->subresourceRange = VkImageSubresourceRange{ VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
-
-    barrier = &barriers[1];
-    barrier->sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    barrier->srcAccessMask = VK_ACCESS_NONE;
-    barrier->dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-    barrier->oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    barrier->newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    barrier->srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier->dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier->image = a_targetImage;
-    barrier->subresourceRange = VkImageSubresourceRange{ VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
-
-    vkCmdPipelineBarrier(
-      a_cmdBuff,
-      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-      VK_PIPELINE_STAGE_TRANSFER_BIT,
-      VK_DEPENDENCY_BY_REGION_BIT,
-      0, nullptr,
-      0, nullptr,
-      2, barriers
-    );
-  }
-
-  ext = m_swapchain.GetExtent();
-  VkImageCopy imageCopy {
-    VkImageSubresourceLayers{ VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 },
-    {0, 0, 0},
-    VkImageSubresourceLayers{ VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 },
-    {0, 0, 0},
-    {ext.width, ext.height, 1}
-  };
-
-  vkCmdCopyImage(
-    a_cmdBuff,
-    m_procImg.image,
-    VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-    a_targetImage,
-    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-    1,
-    &imageCopy
-  );
-
-  {
-    VkImageMemoryBarrier barriers[2] = {};
-
-    VkImageMemoryBarrier* barrier = &barriers[0];
-    barrier->sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    barrier->srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-    barrier->dstAccessMask = VK_ACCESS_NONE;
-    barrier->oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-    barrier->newLayout = VK_IMAGE_LAYOUT_GENERAL;
-    barrier->srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier->dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier->image = m_procImg.image;
-    barrier->subresourceRange = VkImageSubresourceRange{ VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
-
-    barrier = &barriers[1];
-    barrier->sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    barrier->srcAccessMask = VK_ACCESS_NONE;
-    barrier->dstAccessMask = VK_ACCESS_MEMORY_READ_BIT;
-    barrier->oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    barrier->newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-    barrier->srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier->dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier->image = a_targetImage;
-    barrier->subresourceRange = VkImageSubresourceRange{ VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
-
-    vkCmdPipelineBarrier(
-      a_cmdBuff,
-      VK_PIPELINE_STAGE_TRANSFER_BIT,
-      VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
-      VK_DEPENDENCY_BY_REGION_BIT,
-      0, nullptr,
-      0, nullptr,
-      2, barriers
-    );
+    vkCmdEndRenderPass(a_cmdBuff);
   }
 
   if(m_input.drawFSQuad)
@@ -586,10 +616,10 @@ void SimpleShadowmapRender::CleanupPipelineAndSwapchain()
     vkDestroyFence(m_device, m_frameFences[i], nullptr);
   }
 
-  if(m_memPreproc != VK_NULL_HANDLE)
+  if(m_memShadowMap != VK_NULL_HANDLE)
   {
-    vkFreeMemory(m_device, m_memPreproc, VK_NULL_HANDLE);
-    m_memPreproc = VK_NULL_HANDLE;
+    vkFreeMemory(m_device, m_memShadowMap, VK_NULL_HANDLE);
+    m_memShadowMap = VK_NULL_HANDLE;
   }
 
   m_swapchain.Cleanup();
@@ -604,24 +634,21 @@ void SimpleShadowmapRender::RecreateSwapChain()
   m_presentationResources.queue = m_swapchain.CreateSwapChain(m_physicalDevice, m_device, m_surface, m_width, m_height,
          oldImgNum, m_vsync);
 
-  m_pPreproc = std::make_shared<vk_utils::RenderTarget>(m_device, VkExtent2D{m_width, m_height});
+  m_pShadowMap = std::make_shared<vk_utils::RenderTarget>(m_device, VkExtent2D{2048, 2048});
 
-  {
-    vk_utils::AttachmentInfo infoPreproc;
-    infoPreproc.format           = VK_FORMAT_B8G8R8A8_UNORM;
-    infoPreproc.usage            = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
-    infoPreproc.imageSampleCount = VK_SAMPLE_COUNT_1_BIT;
-    m_preprocId                  = m_pPreproc->CreateAttachment(infoPreproc);
-  }
-  {
-    vk_utils::AttachmentInfo infoDepth;
-    infoDepth.format           = VK_FORMAT_D16_UNORM;
-    infoDepth.usage            = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
-    infoDepth.imageSampleCount = VK_SAMPLE_COUNT_1_BIT;
-    m_depthId                  = m_pPreproc->CreateAttachment(infoDepth);
-  }
+  vk_utils::AttachmentInfo infoDepth;
+  infoDepth.format           = VK_FORMAT_D16_UNORM;
+  infoDepth.usage            = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+  infoDepth.imageSampleCount = VK_SAMPLE_COUNT_1_BIT;
+  m_shadowMapId              = m_pShadowMap->CreateAttachment(infoDepth);
 
-  auto memReqs = m_pPreproc->GetMemoryRequirements();
+  vk_utils::AttachmentInfo infoPreVSM;
+  infoPreVSM.format           = VK_FORMAT_R32G32_SFLOAT;
+  infoPreVSM.usage            = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT;
+  infoPreVSM.imageSampleCount = VK_SAMPLE_COUNT_1_BIT;
+  m_preVSMId                  = m_pShadowMap->CreateAttachment(infoPreVSM);
+
+  auto memReqs = m_pShadowMap->GetMemoryRequirements();
   std::uint32_t size1 = memReqs[0].size + (memReqs[1].alignment - memReqs[0].size % memReqs[1].alignment) % memReqs[1].alignment;
 
   // memory for all components
@@ -632,11 +659,12 @@ void SimpleShadowmapRender::RecreateSwapChain()
     allocateInfo.allocationSize  = size1 + memReqs[1].size;
     allocateInfo.memoryTypeIndex = vk_utils::findMemoryType(memReqs[0].memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, m_physicalDevice);
 
-    VK_CHECK_RESULT(vkAllocateMemory(m_device, &allocateInfo, NULL, &m_memPreproc));
+    VK_CHECK_RESULT(vkAllocateMemory(m_device, &allocateInfo, NULL, &m_memShadowMap));
   }
 
-  m_pPreproc->CreateViewAndBindMemory(m_memPreproc, {0, size1});
-  m_pPreproc->CreateDefaultRenderPass();
+  m_pShadowMap->CreateViewAndBindMemory(m_memShadowMap, {0, size1});
+  m_pShadowMap->CreateDefaultSampler();
+  m_pShadowMap->CreateDefaultRenderPass();
 
   m_frameFences.resize(m_framesInFlight);
   VkFenceCreateInfo fenceInfo = {};
@@ -650,7 +678,7 @@ void SimpleShadowmapRender::RecreateSwapChain()
   m_cmdBuffersDrawMain = vk_utils::createCommandBuffers(m_device, m_commandPool, m_framesInFlight);
   for (uint32_t i = 0; i < m_swapchain.GetImageCount(); ++i)
   {
-    BuildCommandBufferSimple(m_cmdBuffersDrawMain[i], m_swapchain.GetAttachment(i).image,
+    BuildCommandBufferSimple(m_cmdBuffersDrawMain[i], m_frameBuffers[i],
                              m_swapchain.GetAttachment(i).view, m_basicForwardPipeline.pipeline);
   }
 
@@ -665,20 +693,13 @@ void SimpleShadowmapRender::Cleanup()
     ImGui::DestroyContext();
   }
 
-  m_pPreproc    = nullptr;
-
-  m_pShadowMap2 = nullptr;
+  m_pShadowMap = nullptr;
   m_pFSQuad     = nullptr; // smartptr delete it's resources
 
   if(m_memShadowMap != VK_NULL_HANDLE)
   {
     vkFreeMemory(m_device, m_memShadowMap, VK_NULL_HANDLE);
     m_memShadowMap = VK_NULL_HANDLE;
-  }
-  if(m_memPreproc != VK_NULL_HANDLE)
-  {
-    vkFreeMemory(m_device, m_memPreproc, VK_NULL_HANDLE);
-    m_memPreproc = VK_NULL_HANDLE;
   }
 
   CleanupPipelineAndSwapchain();
@@ -724,7 +745,7 @@ void SimpleShadowmapRender::Cleanup()
   vkDestroyBuffer(m_device, m_kernelBuf, nullptr);
   vkFreeMemory(m_device, m_kernelAlloc, nullptr);
 
-  deleteImg(m_device, &m_procImg);
+  deleteImg(m_device, &m_VSM);
 }
 
 void SimpleShadowmapRender::ProcessInput(const AppInput &input)
@@ -751,7 +772,7 @@ void SimpleShadowmapRender::ProcessInput(const AppInput &input)
 
     for (uint32_t i = 0; i < m_framesInFlight; ++i)
     {
-      BuildCommandBufferSimple(m_cmdBuffersDrawMain[i], m_swapchain.GetAttachment(i).image,
+      BuildCommandBufferSimple(m_cmdBuffersDrawMain[i], m_frameBuffers[i],
                                m_swapchain.GetAttachment(i).view, m_basicForwardPipeline.pipeline);
     }
   }
@@ -810,7 +831,7 @@ void SimpleShadowmapRender::LoadScene(const char* path, bool transpose_inst_matr
 
   for (uint32_t i = 0; i < m_framesInFlight; ++i)
   {
-    BuildCommandBufferSimple(m_cmdBuffersDrawMain[i], m_swapchain.GetAttachment(i).image,
+    BuildCommandBufferSimple(m_cmdBuffersDrawMain[i], m_frameBuffers[i],
                              m_swapchain.GetAttachment(i).view, m_basicForwardPipeline.pipeline);
   }
 }
@@ -828,7 +849,7 @@ void SimpleShadowmapRender::DrawFrameSimple()
   VkSemaphore waitSemaphores[] = {m_presentationResources.imageAvailable};
   VkPipelineStageFlags waitStages[] = {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
 
-  BuildCommandBufferSimple(currentCmdBuf, m_swapchain.GetAttachment(imageIdx).image, m_swapchain.GetAttachment(imageIdx).view,
+  BuildCommandBufferSimple(currentCmdBuf, m_frameBuffers[imageIdx], m_swapchain.GetAttachment(imageIdx).view,
                            m_basicForwardPipeline.pipeline);
 
   VkSubmitInfo submitInfo = {};
@@ -952,14 +973,17 @@ void SimpleShadowmapRender::SetupGUIElements()
     //ImGui::SliderFloat3("Light source target", m_uniforms.lightDir.M, -10.f, 10.f);
     //ImGui::SliderFloat("Spotlight inner angle (deg)", &m_uniforms.spotlightInnerAngle, 0.0f, m_uniforms.spotlightOuterAngle);
     //ImGui::SliderFloat("Spotlight outer angle (deg)", &m_uniforms.spotlightOuterAngle, m_uniforms.spotlightInnerAngle, 180.0f);
+    ImGui::Checkbox("VSM", (bool*)&m_uniforms.vsm);
+
+
 
     ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / ImGui::GetIO().Framerate, ImGui::GetIO().Framerate);
     ImGui::NewLine();
 
     ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f),"Press 'B' to recompile and reload shaders");
-    ImGui::Text("Changing bindings is not supported.");
-    ImGui::Text("Vertex shader path: %s", VERTEX_SHADER_PATH.c_str());
-    ImGui::Text("Fragment shader path: %s", FRAGMENT_SHADER_PATH.c_str());
+    //ImGui::Text("Changing bindings is not supported.");
+    //ImGui::Text("Vertex shader path: %s", VERTEX_SHADER_PATH.c_str());
+    //ImGui::Text("Fragment shader path: %s", FRAGMENT_SHADER_PATH.c_str());
     ImGui::End();
   }
 

@@ -116,6 +116,10 @@ private:
   VkDescriptorSet m_computeDSet = VK_NULL_HANDLE;
   VkDescriptorSetLayout m_computeDSetLayout = VK_NULL_HANDLE;
 
+  VkRenderPass m_screenRenderPass = VK_NULL_HANDLE; // main renderpass
+  vk_utils::VulkanImageMem m_depthBuffer{}; // screen depthbuffer
+  std::vector<VkFramebuffer> m_frameBuffers;
+
   std::shared_ptr<vk_utils::DescriptorMaker> m_pBindings = nullptr;
 
   VkSurfaceKHR m_surface = VK_NULL_HANDLE;
@@ -145,19 +149,17 @@ private:
   // objects and data for shadow map
   //
   std::shared_ptr<vk_utils::IQuad>               m_pFSQuad;
-  std::shared_ptr<vk_utils::RenderTarget>        m_pShadowMap2;
+  std::shared_ptr<vk_utils::RenderTarget>        m_pShadowMap;
   uint32_t                                       m_shadowMapId = 0;
 
   VkDeviceMemory        m_memShadowMap = VK_NULL_HANDLE;
   VkDescriptorSet       m_quadDS;
   VkDescriptorSetLayout m_quadDSLayout = nullptr;
 
-  std::shared_ptr<vk_utils::RenderTarget> m_pPreproc;
-  uint32_t                                m_preprocId = 0;
+  uint32_t                                m_preVSMId = 0;
   uint32_t                                m_depthId = 0;
-  VkDeviceMemory                          m_memPreproc = VK_NULL_HANDLE;
 
-  vk_utils::VulkanImageMem m_procImg {};
+  vk_utils::VulkanImageMem m_VSM {};
 
   struct InputControlMouseEtc
   {
@@ -192,7 +194,7 @@ private:
   void CreateInstance();
   void CreateDevice(uint32_t a_deviceId);
 
-  void BuildCommandBufferSimple(VkCommandBuffer a_cmdBuff, VkImage a_targetImage,
+  void BuildCommandBufferSimple(VkCommandBuffer a_cmdBuff, VkFramebuffer a_frameBuff,
                                 VkImageView a_targetImageView, VkPipeline a_pipeline);
 
   void DrawSceneCmd(VkCommandBuffer a_cmdBuff, const float4x4& a_wvp);
