@@ -251,8 +251,8 @@ void SimpleShadowmapRender::CreateUniformBuffer()
 
   vkMapMemory(m_device, m_uboAlloc, 0, sizeof(m_uniforms), 0, &m_uboMappedMem);
 
-  m_uniforms.spotlightOuterAngle = 30;
-  m_uniforms.spotlightInnerAngle = 10;
+  m_uniforms.pad2 = 30;                //m_uniforms.spotlightOuterAngle = 30;
+  m_uniforms.spotlightOuterAngle = 10; //m_uniforms.spotlightInnerAngle = 10;
 
   UpdateUniformBuffer(0.0f);
 }
@@ -706,8 +706,8 @@ void SimpleShadowmapRender::SetupGUIElements()
 
     //ImGui::SliderFloat3("Light source position", m_uniforms.lightPos.M, -10.f, 10.f);
     //ImGui::SliderFloat3("Light source target", m_uniforms.lightDir.M, -10.f, 10.f);
-    ImGui::SliderFloat("Spotlight inner angle (deg)", &m_uniforms.spotlightInnerAngle, 0.0f, m_uniforms.spotlightOuterAngle);
-    ImGui::SliderFloat("Spotlight outer angle (deg)", &m_uniforms.spotlightOuterAngle, m_uniforms.spotlightInnerAngle, 180.0f);
+    ImGui::SliderFloat("Spotlight inner angle (deg)", &m_uniforms.spotlightInnerAngle+1, 0.0f, *(&m_uniforms.spotlightOuterAngle+1), NULL, ImGuiSliderFlags_AlwaysClamp);
+    ImGui::SliderFloat("Spotlight outer angle (deg)", &m_uniforms.spotlightOuterAngle+1, *(&m_uniforms.spotlightInnerAngle+1), 180.0f, NULL, ImGuiSliderFlags_AlwaysClamp);
 
     ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / ImGui::GetIO().Framerate, ImGui::GetIO().Framerate);
     ImGui::NewLine();

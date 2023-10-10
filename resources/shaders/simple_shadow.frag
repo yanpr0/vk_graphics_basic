@@ -23,7 +23,6 @@ layout (binding = 1) uniform sampler2D shadowMap;
 
 void main()
 {
-  const float PI = 3.14159265358979f;
   const float EPS = 0.00001f;
   const float maxBound = cos(radians(Params.spotlightInnerAngle / 2.0f));
   const float minBound = cos(radians(Params.spotlightOuterAngle / 2.0f));
@@ -44,7 +43,7 @@ void main()
   vec4 lightColor2 = vec4(1.0f, 1.0f, 1.0f, 1.0f);
 
   vec3 lightDir   = normalize(Params.lightPos - surf.wPos);
-  vec4 lightColor = max(dot(surf.wNorm, lightDir), 0.0f) * lightColor2;
+  vec4 lightColor = max(dot(surf.wNorm, lightDir), 0.0f) * lightColor1;
 
   out_fragColor   = intensity * (lightColor*shadow + vec4(0.1f)) * vec4(Params.baseColor, 1.0f);
 }

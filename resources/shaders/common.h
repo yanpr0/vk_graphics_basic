@@ -26,8 +26,10 @@ struct UniformParams
   float time;
   vec3  lightDir;
   vec3  baseColor;
+  float pad1;
   float spotlightInnerAngle;
   float spotlightOuterAngle;
+  float pad2;
   bool animateLightColor;
 };
 
