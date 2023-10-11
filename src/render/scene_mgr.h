@@ -27,6 +27,8 @@ struct SceneManager
   bool LoadSceneXML(const std::string &scenePath, bool transpose = true);
   void LoadSingleTriangle();
 
+  void MakeTesselatedMeshScene(uint32_t resolution);
+
   uint32_t AddMeshFromFile(const std::string& meshPath);
   uint32_t AddMeshFromData(cmesh::SimpleMesh &meshData);
 

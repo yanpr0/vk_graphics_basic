@@ -4,6 +4,7 @@
 #define VK_NO_PROTOTYPES
 #include "../../render/scene_mgr.h"
 #include "../../render/render_common.h"
+#include "../../render/render_gui.h"
 #include "../../../resources/shaders/common.h"
 #include <geom/vk_mesh.h>
 #include <vk_descriptor_sets.h>
@@ -18,6 +19,9 @@
 class SimpleShadowmapRender : public IRender
 {
 public:
+  const std::string VERTEX_SHADER_PATH = "../resources/shaders/simple.vert";
+  const std::string FRAGMENT_SHADER_PATH = "../resources/shaders/simple_shadow.frag";
+
   SimpleShadowmapRender(uint32_t a_width, uint32_t a_height);
   ~SimpleShadowmapRender()  { Cleanup(); };
 
@@ -86,7 +90,9 @@ private:
   struct
   {
     float4x4 projView;
-    float4x4 model;
+    //float4x4 model;
+    float minHeight;
+    float maxHeight;
   } pushConst2M;
 
   float4x4 m_worldViewProj;
@@ -110,6 +116,12 @@ private:
   VulkanSwapChain m_swapchain;
   std::vector<VkFramebuffer> m_frameBuffers;
   vk_utils::VulkanImageMem m_depthBuffer{}; // screen depthbuffer
+
+  // *** GUI
+  std::shared_ptr<IRenderGUI> m_pGUIRender;
+  void SetupGUIElements();
+  void DrawFrameWithGUI();
+  //
 
   Camera   m_cam;
   uint32_t m_width  = 1024u;
@@ -164,7 +176,9 @@ private:
     bool   usePerspectiveM;  ///!< use perspective matrix if true and ortographics otherwise
   
   } m_light;
- 
+
+  uint32_t m_resolution = 1024;
+
   void DrawFrameSimple();
 
   void CreateInstance();

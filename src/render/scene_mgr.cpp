@@ -125,7 +125,67 @@ void SceneManager::LoadSingleTriangle()
   m_pCopyHelper->UpdateBuffer(m_geoIdxBuf,  0, indices.data(), indexBufSize);
 }
 
+void SceneManager::MakeTesselatedMeshScene(uint32_t resolution)
+{
+  int res = resolution;
+  uint32_t vertNum = (res + 1) * (res + 1);
+  uint32_t indNum = res * res * 2 * 3;
+  cmesh::SimpleMesh mesh{vertNum, indNum};
+  mesh.matIndices = {};
 
+  float d = 1.0f / res;
+  int i_pos = 0;
+  int i_norm = 0;
+  int i_tex = 0;
+  for (int i = 0; i < res + 1; ++i)
+  {
+    for (int j = 0; j < res + 1; ++j)
+    {
+      mesh.vPos4f[i_pos++] = j * d - 0.5;
+      mesh.vPos4f[i_pos++] = 0.0;
+      mesh.vPos4f[i_pos++] = i * d - 0.5;
+      mesh.vPos4f[i_pos++] = 1.0;
+
+      mesh.vNorm4f[i_norm++] = 0.0;
+      mesh.vNorm4f[i_norm++] = 1.0;
+      mesh.vNorm4f[i_norm++] = 0.0;
+      mesh.vNorm4f[i_norm++] = 0.0;
+
+      mesh.vTexCoord2f[i_tex++] = j * d;
+      mesh.vTexCoord2f[i_tex++] = i * d;
+    }
+  }
+
+  int k = 0;
+  for (int i = 0; i < res; ++i)
+  {
+    for (int j = 0; j < res; ++j)
+    {
+      mesh.indices[k++] = i * (res + 1) + j;
+      mesh.indices[k++] = i * (res + 1) + j + 1;
+      mesh.indices[k++] = (i + 1) * (res + 1) + j + 1;
+
+      mesh.indices[k++] = i * (res + 1) + j;
+      mesh.indices[k++] = (i + 1) * (res + 1) + j + 1;
+      mesh.indices[k++] = (i + 1) * (res + 1) + j;
+    }
+  }
+
+  uint32_t meshId = AddMeshFromData(mesh);
+  InstanceMesh(meshId, LiteMath::scale4x4(float3(5.f)));
+
+  hydra_xml::Camera cam = {};
+  cam.fov = 39.5977554f;
+  cam.nearPlane = 0.00999999978f;
+  cam.farPlane  = 100.0f;
+  cam.pos[0] = 0.0f; cam.pos[1] = 1.0f; cam.pos[2] = 4.92939f;
+  cam.up[0] = 0.0f; cam.up[1] = 1.0f; cam.up[2] = 1.62921e-07f;
+  cam.lookAt[0] = 0.0f; cam.lookAt[1] = 1.62222e-05f; cam.lookAt[2] = -95.0706f;
+
+  m_sceneCameras.push_back(cam);
+
+  LoadGeoDataOnGPU();
+}
 
 uint32_t SceneManager::AddMeshFromFile(const std::string& meshPath)
 {

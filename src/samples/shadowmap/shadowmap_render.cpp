@@ -62,7 +62,7 @@ void SimpleShadowmapRender::InitVulkan(const char** a_instanceExtensions, uint32
   m_pScnMgr = std::make_shared<SceneManager>(m_device, m_physicalDevice, m_queueFamilyIDXs.transfer, m_queueFamilyIDXs.graphics, false);
 }
 
-void SimpleShadowmapRender::InitPresentation(VkSurfaceKHR &a_surface, bool)
+void SimpleShadowmapRender::InitPresentation(VkSurfaceKHR &a_surface, bool initGUI)
 {
   m_surface = a_surface;
 
@@ -119,6 +119,11 @@ void SimpleShadowmapRender::InitPresentation(VkSurfaceKHR &a_surface, bool)
   m_pShadowMap2->CreateViewAndBindMemory(m_memShadowMap, {0});
   m_pShadowMap2->CreateDefaultSampler();
   m_pShadowMap2->CreateDefaultRenderPass();
+
+  if (initGUI)
+  {
+    m_pGUIRender = std::make_shared<ImGuiRender>(m_instance, m_device, m_physicalDevice, m_queueFamilyIDXs.graphics, m_graphicsQueue, m_swapchain);
+  }
 }
 
 void SimpleShadowmapRender::CreateInstance()
@@ -156,13 +161,17 @@ void SimpleShadowmapRender::CreateDevice(uint32_t a_deviceId)
 void SimpleShadowmapRender::SetupSimplePipeline()
 {
   std::vector<std::pair<VkDescriptorType, uint32_t> > dtypes = {
-      {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,             1},
+      {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,             2},
       {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,     2}
   };
 
-  m_pBindings = std::make_shared<vk_utils::DescriptorMaker>(m_device, dtypes, 2);
-  
+  m_pBindings = std::make_shared<vk_utils::DescriptorMaker>(m_device, dtypes, 3);
+
   auto shadowMap = m_pShadowMap2->m_attachments[m_shadowMapId];
+
+  m_pBindings->BindBegin(VK_SHADER_STAGE_VERTEX_BIT);
+  m_pBindings->BindBuffer(0, m_ubo, VK_NULL_HANDLE, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
+  m_pBindings->BindEnd(&m_dSet, &m_dSetLayout);
 
   m_pBindings->BindBegin(VK_SHADER_STAGE_FRAGMENT_BIT);
   m_pBindings->BindBuffer(0, m_ubo, VK_NULL_HANDLE, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
@@ -246,7 +255,12 @@ void SimpleShadowmapRender::CreateUniformBuffer()
 
   vkMapMemory(m_device, m_uboAlloc, 0, sizeof(m_uniforms), 0, &m_uboMappedMem);
 
+  m_uniforms.invRes      = 1.0f / m_resolution;
+
   UpdateUniformBuffer(0.0f);
+
+  pushConst2M.minHeight = 0.0;
+  pushConst2M.maxHeight = 1.0;
 }
 
 void SimpleShadowmapRender::UpdateUniformBuffer(float a_time)
@@ -274,7 +288,7 @@ void SimpleShadowmapRender::DrawSceneCmd(VkCommandBuffer a_cmdBuff, const float4
   for (uint32_t i = 0; i < m_pScnMgr->InstancesNum(); ++i)
   {
     auto inst         = m_pScnMgr->GetInstanceInfo(i);
-    pushConst2M.model = m_pScnMgr->GetInstanceMatrix(i);
+
     vkCmdPushConstants(a_cmdBuff, m_basicForwardPipeline.layout, stageFlags, 0, sizeof(pushConst2M), &pushConst2M);
 
     auto mesh_info = m_pScnMgr->GetMeshInfo(inst.mesh_id);
@@ -427,10 +441,17 @@ void SimpleShadowmapRender::RecreateSwapChain()
                              m_swapchain.GetAttachment(i).view, m_basicForwardPipeline.pipeline);
   }
 
+  m_pGUIRender->OnSwapchainChanged(m_swapchain);
 }
 
 void SimpleShadowmapRender::Cleanup()
 {
+  if (m_pGUIRender)
+  {
+    m_pGUIRender = nullptr;
+    ImGui::DestroyContext();
+  }
+
   m_pShadowMap2 = nullptr;
   m_pFSQuad     = nullptr; // smartptr delete it's resources
   
@@ -534,7 +555,8 @@ void SimpleShadowmapRender::UpdateView()
 
 void SimpleShadowmapRender::LoadScene(const char* path, bool transpose_inst_matrices)
 {
-  m_pScnMgr->LoadSceneXML(path, transpose_inst_matrices);
+  m_pScnMgr->MakeTesselatedMeshScene(m_resolution);
+  //m_pScnMgr->LoadSceneXML(path, transpose_inst_matrices);
 
   CreateUniformBuffer();
   SetupSimplePipeline();
@@ -601,21 +623,106 @@ void SimpleShadowmapRender::DrawFrameSimple()
   vkQueueWaitIdle(m_presentationResources.queue);
 }
 
+void SimpleShadowmapRender::DrawFrameWithGUI()
+{
+  vkWaitForFences(m_device, 1, &m_frameFences[m_presentationResources.currentFrame], VK_TRUE, UINT64_MAX);
+  vkResetFences(m_device, 1, &m_frameFences[m_presentationResources.currentFrame]);
+
+  uint32_t imageIdx;
+  auto result = m_swapchain.AcquireNextImage(m_presentationResources.imageAvailable, &imageIdx);
+  if (result == VK_ERROR_OUT_OF_DATE_KHR)
+  {
+    RecreateSwapChain();
+    return;
+  }
+  else if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR)
+  {
+    RUN_TIME_ERROR("Failed to acquire the next swapchain image!");
+  }
+
+  auto currentCmdBuf = m_cmdBuffersDrawMain[m_presentationResources.currentFrame];
+
+  VkSemaphore waitSemaphores[] = {m_presentationResources.imageAvailable};
+  VkPipelineStageFlags waitStages[] = {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
+
+  BuildCommandBufferSimple(currentCmdBuf, m_frameBuffers[imageIdx], m_swapchain.GetAttachment(imageIdx).view,
+    m_basicForwardPipeline.pipeline);
+
+  ImDrawData* pDrawData = ImGui::GetDrawData();
+  auto currentGUICmdBuf = m_pGUIRender->BuildGUIRenderCommand(imageIdx, pDrawData);
+
+  std::vector<VkCommandBuffer> submitCmdBufs = {currentCmdBuf, currentGUICmdBuf};
+
+  VkSubmitInfo submitInfo = {};
+  submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+  submitInfo.waitSemaphoreCount = 1;
+  submitInfo.pWaitSemaphores = waitSemaphores;
+  submitInfo.pWaitDstStageMask = waitStages;
+  submitInfo.commandBufferCount = (uint32_t)submitCmdBufs.size();
+  submitInfo.pCommandBuffers = submitCmdBufs.data();
+
+  VkSemaphore signalSemaphores[] = {m_presentationResources.renderingFinished};
+  submitInfo.signalSemaphoreCount = 1;
+  submitInfo.pSignalSemaphores = signalSemaphores;
+
+  VK_CHECK_RESULT(vkQueueSubmit(m_graphicsQueue, 1, &submitInfo, m_frameFences[m_presentationResources.currentFrame]));
+
+  VkResult presentRes = m_swapchain.QueuePresent(m_presentationResources.queue, imageIdx,
+    m_presentationResources.renderingFinished);
+
+  if (presentRes == VK_ERROR_OUT_OF_DATE_KHR || presentRes == VK_SUBOPTIMAL_KHR)
+  {
+    RecreateSwapChain();
+  }
+  else if (presentRes != VK_SUCCESS)
+  {
+    RUN_TIME_ERROR("Failed to present swapchain image");
+  }
+
+  m_presentationResources.currentFrame = (m_presentationResources.currentFrame + 1) % m_framesInFlight;
+
+  vkQueueWaitIdle(m_presentationResources.queue);
+}
+
 void SimpleShadowmapRender::DrawFrame(float a_time, DrawMode a_mode)
 {
   UpdateUniformBuffer(a_time);
   switch (a_mode)
   {
     case DrawMode::WITH_GUI:
-//      DrawFrameWithGUI();
-//      break;
+      SetupGUIElements();
+      DrawFrameWithGUI();
+      break;
     case DrawMode::NO_GUI:
       DrawFrameSimple();
       break;
     default:
       DrawFrameSimple();
   }
-
 }
 
+void SimpleShadowmapRender::SetupGUIElements()
+{
+  ImGui_ImplVulkan_NewFrame();
+  ImGui_ImplGlfw_NewFrame();
+  ImGui::NewFrame();
+  {
+    ImGui::Begin("Shadowmap render settings");
+
+    ImGui::SliderFloat("min height", &pushConst2M.minHeight, 0.f, pushConst2M.maxHeight, NULL, ImGuiSliderFlags_AlwaysClamp);
+    ImGui::SliderFloat("max height", &pushConst2M.maxHeight, pushConst2M.minHeight, 10.f, NULL, ImGuiSliderFlags_AlwaysClamp);
+
+    ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / ImGui::GetIO().Framerate, ImGui::GetIO().Framerate);
+    ImGui::NewLine();
+
+    ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f),"Press 'B' to recompile and reload shaders");
+    ImGui::Text("Changing bindings is not supported.");
+    ImGui::Text("Vertex shader path: %s", VERTEX_SHADER_PATH.c_str());
+    ImGui::Text("Fragment shader path: %s", FRAGMENT_SHADER_PATH.c_str());
+    ImGui::End();
+  }
+
+  // Rendering
+  ImGui::Render();
+}
 
