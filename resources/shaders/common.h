@@ -25,6 +25,7 @@ struct UniformParams
   vec3  lightPos;
   float time;
   vec3  baseColor;
+  uint  ssaa;
   bool animateLightColor;
 };
 

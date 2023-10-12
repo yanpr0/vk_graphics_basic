@@ -4,6 +4,7 @@
 #define VK_NO_PROTOTYPES
 #include "../../render/scene_mgr.h"
 #include "../../render/render_common.h"
+#include "../../render/render_gui.h"
 #include "../../../resources/shaders/common.h"
 #include <geom/vk_mesh.h>
 #include <vk_descriptor_sets.h>
@@ -18,6 +19,9 @@
 class SimpleShadowmapRender : public IRender
 {
 public:
+  const std::string VERTEX_SHADER_PATH = "../resources/shaders/simple.vert";
+  const std::string FRAGMENT_SHADER_PATH = "../resources/shaders/simple_shadow.frag";
+
   SimpleShadowmapRender(uint32_t a_width, uint32_t a_height);
   ~SimpleShadowmapRender()  { Cleanup(); };
 
@@ -90,7 +94,7 @@ private:
   } pushConst2M;
 
   float4x4 m_worldViewProj;
-  float4x4 m_lightMatrix;    
+  float4x4 m_lightMatrix;
 
   UniformParams m_uniforms {};
   VkBuffer m_ubo = VK_NULL_HANDLE;
@@ -98,6 +102,7 @@ private:
   void* m_uboMappedMem = nullptr;
 
   pipeline_data_t m_basicForwardPipeline {};
+  pipeline_data_t m_superForwardPipeline {};
   pipeline_data_t m_shadowPipeline {};
 
   VkDescriptorSet m_dSet = VK_NULL_HANDLE;
@@ -110,6 +115,12 @@ private:
   VulkanSwapChain m_swapchain;
   std::vector<VkFramebuffer> m_frameBuffers;
   vk_utils::VulkanImageMem m_depthBuffer{}; // screen depthbuffer
+
+  // *** GUI
+  std::shared_ptr<IRenderGUI> m_pGUIRender;
+  void SetupGUIElements();
+  void DrawFrameWithGUI();
+  //
 
   Camera   m_cam;
   uint32_t m_width  = 1024u;
@@ -125,17 +136,21 @@ private:
   std::vector<const char*> m_validationLayers;
 
   std::shared_ptr<SceneManager>     m_pScnMgr;
-  
+
   // objects and data for shadow map
   //
   std::shared_ptr<vk_utils::IQuad>               m_pFSQuad;
   //std::shared_ptr<vk_utils::RenderableTexture2D> m_pShadowMap;
   std::shared_ptr<vk_utils::RenderTarget>        m_pShadowMap2;
   uint32_t                                       m_shadowMapId = 0;
-  
+
   VkDeviceMemory        m_memShadowMap = VK_NULL_HANDLE;
-  VkDescriptorSet       m_quadDS; 
+  VkDescriptorSet       m_quadDS;
   VkDescriptorSetLayout m_quadDSLayout = nullptr;
+
+  std::shared_ptr<vk_utils::RenderTarget> m_pSuper;
+  uint32_t m_superId = 0;
+  VkDeviceMemory m_memSuper = VK_NULL_HANDLE;
 
   struct InputControlMouseEtc
   {
@@ -147,31 +162,31 @@ private:
   */
   struct ShadowMapCam
   {
-    ShadowMapCam() 
-    {  
+    ShadowMapCam()
+    {
       cam.pos    = float3(4.0f, 4.0f, 4.0f);
       cam.lookAt = float3(0, 0, 0);
       cam.up     = float3(0, 1, 0);
-  
+
       radius          = 5.0f;
       lightTargetDist = 20.0f;
       usePerspectiveM = true;
     }
 
-    float  radius;           ///!< ignored when usePerspectiveM == true 
+    float  radius;           ///!< ignored when usePerspectiveM == true
     float  lightTargetDist;  ///!< identify depth range
     Camera cam;              ///!< user control for light to later get light worldViewProj matrix
     bool   usePerspectiveM;  ///!< use perspective matrix if true and ortographics otherwise
-  
+
   } m_light;
- 
+
   void DrawFrameSimple();
 
   void CreateInstance();
   void CreateDevice(uint32_t a_deviceId);
 
   void BuildCommandBufferSimple(VkCommandBuffer a_cmdBuff, VkFramebuffer a_frameBuff,
-                                VkImageView a_targetImageView, VkPipeline a_pipeline);
+                                VkImageView a_targetImageView, VkImage a_targetImage, VkPipeline a_pipeline);
 
   void DrawSceneCmd(VkCommandBuffer a_cmdBuff, const float4x4& a_wvp);
 
