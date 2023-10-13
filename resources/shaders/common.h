@@ -25,6 +25,9 @@ struct UniformParams
   vec3  lightPos;
   float time;
   vec3  baseColor;
+  float lightBrightness;
+  int  toneMappingMethod;
+  int  gammaCorrection;
   bool animateLightColor;
 };
 

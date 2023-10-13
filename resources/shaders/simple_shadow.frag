@@ -21,6 +21,17 @@ layout(binding = 0, set = 0) uniform AppData
 
 layout (binding = 1) uniform sampler2D shadowMap;
 
+layout(push_constant) uniform params_t
+{
+    mat4 mProjView;
+    mat4 mModel;
+} params;
+
+vec3 getAlbedo()
+{
+  return normalize(abs(vec3(1.0) - params.mModel[3].xyz + params.mModel[2].xyz));
+}
+
 void main()
 {
   const vec4 posLightClipSpace = Params.lightMatrix*vec4(surf.wPos, 1.0f); // 
@@ -37,6 +48,6 @@ void main()
   vec4 lightColor2 = vec4(1.0f, 1.0f, 1.0f, 1.0f);
    
   vec3 lightDir   = normalize(Params.lightPos - surf.wPos);
-  vec4 lightColor = max(dot(surf.wNorm, lightDir), 0.0f) * lightColor1;
-  out_fragColor   = (lightColor*shadow + vec4(0.1f)) * vec4(Params.baseColor, 1.0f);
+  vec4 lightColor = max(dot(surf.wNorm, lightDir), 0.0f) * lightColor1 * Params.lightBrightness;
+  out_fragColor   = (lightColor*shadow + vec4(0.1f)) * vec4(getAlbedo(), 1.0);
 }

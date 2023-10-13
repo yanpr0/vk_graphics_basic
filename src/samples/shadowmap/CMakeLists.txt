@@ -9,7 +9,7 @@ endif()
 
 set(RENDER_SOURCE
         ../../render/scene_mgr.cpp
-#        ../../render/render_imgui.cpp
+        ../../render/render_imgui.cpp
         shadowmap_render.cpp)
 
 add_executable(shadowmap_renderer main.cpp ../../utils/glfw_window.cpp ${VK_UTILS_SRC} ${SCENE_LOADER_SRC} ${RENDER_SOURCE} ${IMGUI_SRC})
@@ -23,3 +23,4 @@ else()
     target_link_libraries(shadowmap_renderer PRIVATE project_options
                           volk glfw project_warnings) #
 endif()
+
