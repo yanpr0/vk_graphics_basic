@@ -30,34 +30,6 @@ layout (binding = 1) uniform sampler2D shadowMap;
 vec3 getAlbedo()
 {
   return normalize(abs(vec3(1) - params.mModel[3].xyz + params.mModel[2].xyz));
-  //if (float(i) > Params.sssScale)return vec3(1,0,0);
-  //else return vec3(0,1,0);
-  /*switch (i % 7)
-  {
-  case 0: return vec3(1.0, 0.0, 0.0);
-  case 1: return vec3(0.0, 1.0, 0.0);
-  case 2: return vec3(0.0, 0.0, 1.0);
-  case 3: return vec3(1.0, 1.0, 0.0);
-  case 4: return vec3(1.0, 0.0, 1.0);
-  case 5: return vec3(0.0, 1.0, 1.0);
-  case 6: return vec3(1.0, 1.0, 1.0);
-  default: return vec3(1.0, 1.0, 1.0);
-  }*/
-  switch (1 % 7)
-  {
-    case 0:
-    return vec3(0.57f, 0.4f, 0.65f);
-  case 1:
-    return vec3(0.29f, 0.44f, 0.65f);
-  case 2:
-    return vec3(0.3f, 0.5f, 0.32f);
-  case 3:
-    return vec3(0.73f, 0.8f, 0.19f);
-  case 4:
-    return vec3(0.31f, 0.25f, 0.85f);
-  case 5:
-    return vec3(1.0f, 0.0f, 0.0f);
-    }
 }
 
 // https://www.iryoku.com/translucency/downloads/Real-Time-Realistic-Skin-Translucency.pdf
